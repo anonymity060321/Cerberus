@@ -9,10 +9,10 @@ android {
 
     defaultConfig {
         applicationId = "com.yiran.cerberus"
-        minSdk = 26
+        minSdk = 35
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.1.2"
+        versionCode = 6
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -105,6 +105,7 @@ dependencies {
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.credentials)
     
     implementation(libs.jna) {
         artifact { type = "aar" }

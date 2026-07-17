@@ -95,6 +95,7 @@ import com.yiran.cerberus.util.PasswordGenerator
 import com.yiran.cerberus.util.TotpUtil
 import kotlinx.coroutines.launch
 import uniffi.rust_core.Account
+import uniffi.rust_core.OtpType
 
 @Composable
 fun Modifier.dragToReorder(
@@ -382,7 +383,7 @@ fun AccountItemCard(
 
                 if (account.hasOtp && account.secretKey.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    OtpSection(codeProvider, progressProvider)
+                    OtpSection(codeProvider, progressProvider, account.otpType)
                 }
             }
 
@@ -570,7 +571,11 @@ fun EditPasswordDialog(
 }
 
 @Composable
-fun OtpSection(codeProvider: () -> String, progressProvider: () -> Float) {
+fun OtpSection(
+    codeProvider: () -> String,
+    progressProvider: () -> Float,
+    otpType: OtpType
+) {
     val context = LocalContext.current
     val otpCode = codeProvider()
 
@@ -599,13 +604,23 @@ fun OtpSection(codeProvider: () -> String, progressProvider: () -> Float) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         val displayCode = if (otpCode.length == 6) "${otpCode.take(3)} ${otpCode.substring(3)}" else otpCode
-        Text(
-            text = displayCode,
-            style = MaterialTheme.typography.headlineMedium,
-            color = progressColor,
-            fontWeight = FontWeight.ExtraBold,
-            letterSpacing = 2.sp
-        )
+        Column {
+            if (otpType == OtpType.STEAM) {
+                Text(
+                    text = "STEAM GUARD",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(
+                text = displayCode,
+                style = MaterialTheme.typography.headlineMedium,
+                color = progressColor,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 2.sp
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text = "${remainingSeconds}s", style = MaterialTheme.typography.labelMedium, color = progressColor, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.width(8.dp))
@@ -668,8 +683,10 @@ fun AddAccountDialog(
 
     val secret = remember { mutableStateOf("") }
     val selectedAlgo = remember { mutableStateOf(OtpAlgorithm.SHA1) }
+    val selectedOtpType = remember { mutableStateOf(OtpType.TOTP) }
 
     val expanded = remember { mutableStateOf(false) }
+    val otpTypeExpanded = remember { mutableStateOf(false) }
     val nameError = remember { mutableStateOf("") }
     val usernameError = remember { mutableStateOf("") }
     val passwordError = remember { mutableStateOf("") }
@@ -735,18 +752,71 @@ fun AddAccountDialog(
                     }
                 } else {
                     Text(
-                        text = "配置 ${name.value} 的 TOTP 安全令牌。",
+                        text = if (selectedOtpType.value == OtpType.STEAM) {
+                            "配置 ${name.value} 的 Steam Guard 登录令牌。"
+                        } else {
+                            "配置 ${name.value} 的 TOTP 安全令牌。"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        StyledTextField(
+                            value = if (selectedOtpType.value == OtpType.STEAM) "Steam Guard" else "标准 TOTP",
+                            onValueChange = { },
+                            readOnly = true,
+                            label = "验证码类型",
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = otpTypeExpanded.value) }
+                        )
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .padding(top = 8.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { otpTypeExpanded.value = true }
+                        )
+                        DropdownMenu(
+                            expanded = otpTypeExpanded.value,
+                            onDismissRequest = { otpTypeExpanded.value = false },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("标准 TOTP") },
+                                onClick = {
+                                    selectedOtpType.value = OtpType.TOTP
+                                    secret.value = ""
+                                    secretError.value = ""
+                                    otpTypeExpanded.value = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Steam Guard") },
+                                onClick = {
+                                    selectedOtpType.value = OtpType.STEAM
+                                    selectedAlgo.value = OtpAlgorithm.SHA1
+                                    secret.value = ""
+                                    secretError.value = ""
+                                    otpTypeExpanded.value = false
+                                }
+                            )
+                        }
+                    }
                     StyledTextField(
                         value = secret.value,
-                        onValueChange = { secret.value = it.uppercase().replace(" ", ""); secretError.value = "" },
-                        label = "TOTP 密钥",
+                        onValueChange = {
+                            secret.value = if (selectedOtpType.value == OtpType.STEAM) {
+                                it.filterNot(Char::isWhitespace)
+                            } else {
+                                it.uppercase().replace(" ", "")
+                            }
+                            secretError.value = ""
+                        },
+                        label = if (selectedOtpType.value == OtpType.STEAM) "Steam shared_secret (Base64)" else "TOTP 密钥 (Base32)",
                         isError = secretError.value.isNotEmpty(),
                         supportingText = secretError.value
                     )
-                    Box(modifier = Modifier.fillMaxWidth()) {
+                    if (selectedOtpType.value == OtpType.TOTP) Box(modifier = Modifier.fillMaxWidth()) {
                         StyledTextField(
                             value = selectedAlgo.value.name,
                             onValueChange = { },
@@ -791,13 +861,23 @@ fun AddAccountDialog(
                         if (hasOtp.value) {
                             step.intValue = 2
                         } else {
-                            onConfirm(createAccount(name.value, username.value, password.value, false, "", OtpAlgorithm.SHA1))
+                            onConfirm(createAccount(name.value, username.value, password.value, false, "", OtpAlgorithm.SHA1, OtpType.TOTP))
                         }
                     } else {
-                        if (!TotpUtil.isValidSecret(secret.value)) { secretError.value = "密钥格式错误"
+                        val isSecretValid = if (selectedOtpType.value == OtpType.STEAM) {
+                            TotpUtil.isValidSteamSharedSecret(secret.value)
+                        } else {
+                            TotpUtil.isValidSecret(secret.value)
+                        }
+                        if (!isSecretValid) {
+                            secretError.value = if (selectedOtpType.value == OtpType.STEAM) {
+                                "shared_secret 必须是有效的 Base64"
+                            } else {
+                                "密钥格式错误"
+                            }
                             return@TextButton
                         }
-                        onConfirm(createAccount(name.value, username.value, password.value, true, secret.value, selectedAlgo.value))
+                        onConfirm(createAccount(name.value, username.value, password.value, true, secret.value, selectedAlgo.value, selectedOtpType.value))
                     }
                 },
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
@@ -821,7 +901,15 @@ fun AddAccountDialog(
 }
 
 // 辅助函数
-private fun createAccount(name: String, user: String, pass: String, otp: Boolean, key: String, algo: OtpAlgorithm): Account {
+private fun createAccount(
+    name: String,
+    user: String,
+    pass: String,
+    otp: Boolean,
+    key: String,
+    algo: OtpAlgorithm,
+    otpType: OtpType
+): Account {
     return Account(
         id = System.currentTimeMillis().toInt(),
         name = name,
@@ -830,7 +918,8 @@ private fun createAccount(name: String, user: String, pass: String, otp: Boolean
         iconInitial = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
         hasOtp = otp,
         secretKey = if (otp) key else "",
-        algorithm = algo.toRustAlgo()
+        algorithm = algo.toRustAlgo(),
+        otpType = if (otp) otpType else OtpType.TOTP
     )
 }
 

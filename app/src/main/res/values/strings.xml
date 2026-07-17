@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Cerberus</string>
+    <string name="passkey_provider_name">Cerberus Passkey</string>
+    <string name="passkey_provider_subtitle">本地加密保存并提供 Passkey</string>
 </resources>

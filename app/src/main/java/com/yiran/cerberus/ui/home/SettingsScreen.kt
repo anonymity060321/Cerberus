@@ -3,6 +3,7 @@ package com.yiran.cerberus.ui.home
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Timer
@@ -60,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yiran.cerberus.passkey.PasskeyStore
 import com.yiran.cerberus.util.SecurityUtil
 import java.io.OutputStreamWriter
 
@@ -221,16 +224,16 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     if (showConsentDialog.value) {
         StyledDialog(
             onDismissRequest = { showConsentDialog.value = false },
-            title = "联网偏好说明",
+            title = "检查更新偏好",
             content = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "Cerberus 默认禁用所有联网功能。为了您可以及时获取安全修复与新特性，您可以选择开启“检查更新”服务：",
+                        text = "您可以选择是否启用手动检查更新。Passkey 功能的 Digital Asset Links 身份验证不受此开关影响：",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "• 开启后，仅在您手动点击时访问 GitHub API 获取版本号\n• 我们郑重承诺：应用绝不会收集或上传您的任何令牌数据\n• 未经您的明确允许，应用绝不会在后台静默使用联网权限",
+                        text = "• 检查更新仅在您手动点击时访问 GitHub API\n• 使用 Passkey 时，仅访问 RP 域名公开的 assetlinks.json\n• 任何令牌、密码、shared_secret 或 Passkey 私钥都不会上传",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
@@ -249,7 +252,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                     SecurityUtil.setUpdateCheckAllowed(context, false)
                     isUpdateCheckAllowed.value = false
                     showConsentDialog.value = false
-                }) { Text("保持离线") }
+                }) { Text("不启用检查更新") }
             }
         )
     }
@@ -345,6 +348,23 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             enabled = canUseBiometric
                         )
                     }
+
+                    AboutItem(
+                        icon = Icons.Default.Key,
+                        label = "Passkey 凭据提供程序",
+                        value = "${PasskeyStore.count(context)} 个 / 系统设置",
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_CREDENTIAL_PROVIDER).apply {
+                                        data = "package:${context.packageName}".toUri()
+                                    }
+                                )
+                            }.onFailure {
+                                Toast.makeText(context, "无法打开凭据提供程序设置", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
                 }
             }
 
@@ -396,7 +416,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Cerberus 是一款专注于隐私安全的身份验证工具。我们坚持零网络通信原则，所有数据仅存储于您的物理设备中。",
+                        text = "Cerberus 是一款本地优先的身份验证工具。密码、令牌和 Passkey 私钥仅存储在您的设备中；网络只用于手动检查更新和 Passkey 调用方身份校验。",
                         style = MaterialTheme.typography.bodyMedium,
                         lineHeight = 22.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -449,12 +469,12 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             onClick = { 
                                 SecurityUtil.setUpdateCheckAllowed(context, false)
                                 isUpdateCheckAllowed.value = false
-                                Toast.makeText(context, "已取消联网授权，恢复离线状态", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "已关闭手动检查更新", Toast.LENGTH_SHORT).show()
                             },
                             modifier = Modifier.padding(start = 48.dp)
                         ) {
                             Text(
-                                "取消联网授权并恢复离线",
+                                "关闭手动检查更新",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
                             )

@@ -279,7 +279,7 @@ fun UpdateConsentScreen(onDecision: (Boolean) -> Unit) {
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(
-            text = "联网偏好与更新说明",
+            text = "联网与安全校验说明",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.ExtraBold
         )
@@ -292,15 +292,15 @@ fun UpdateConsentScreen(onDecision: (Boolean) -> Unit) {
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "Cerberus 默认禁用所有联网功能。为了您可以及时获取安全修复与新特性，您可以选择开启“检查更新”服务：",
+                    text = "Cerberus 不上传任何凭据。您可以选择是否允许手动检查更新；使用 Passkey 时，系统会按需访问 RP 域名的 Digital Asset Links 文件来验证调用应用身份。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 
-                TermItem("透明联网", "开启后，应用仅在您手动点击“检查更新”时，通过 GitHub 公开 API 获取最新版本号。")
+                TermItem("透明联网", "检查更新只会在您手动点击后访问 GitHub；Passkey 身份校验只会访问对应 RP 的公开 .well-known/assetlinks.json。")
                 TermItem("隐私红线", "我们郑重承诺：应用绝不会静默上传您的任何令牌数据、账户指纹或个人统计信息。")
-                TermItem("绝对控制", "您可以随时在设置中撤销联网授权。若保持离线，您可以定期前往项目仓库手动获取更新。")
+                TermItem("本地私钥", "Passkey 私钥仅保存在本机加密存储中，不包含在 .cerb 备份内，也不会发送给 Telegram。")
             }
         }
 
@@ -321,7 +321,7 @@ fun UpdateConsentScreen(onDecision: (Boolean) -> Unit) {
             onClick = { onDecision(false) },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("保持离线，绝不联网")
+            Text("不启用检查更新")
         }
         Spacer(modifier = Modifier.height(24.dp))
     }

@@ -68,7 +68,7 @@ class HomeViewModel : ViewModel() {
                 withContext(Dispatchers.Default) {
                     _accounts.filter { it.hasOtp && it.secretKey.isNotEmpty() }.forEach { acct ->
                         try {
-                            val code = TotpUtil.generateTOTP(acct.secretKey, acct.algorithm)
+                            val code = TotpUtil.generateCode(acct.secretKey, acct.algorithm, acct.otpType)
                             _otpCodes[acct.id] = code
                         } catch (_: Exception) {
                         }
@@ -95,7 +95,7 @@ class HomeViewModel : ViewModel() {
         scheduleSave(context)
         // ensure otpCodes updated
         if (account.hasOtp && account.secretKey.isNotEmpty()) {
-            _otpCodes[account.id] = TotpUtil.generateTOTP(account.secretKey, account.algorithm)
+            _otpCodes[account.id] = TotpUtil.generateCode(account.secretKey, account.algorithm, account.otpType)
         }
     }
 

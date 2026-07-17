@@ -14,6 +14,9 @@ use thiserror::Error;
 use data_encoding::BASE32_NOPAD;
 use serde::{Serialize, Deserialize};
 
+mod passkey;
+pub use passkey::{create_passkey, get_passkey_response, PasskeyCreationResult};
+
 // 初始化 UniFFI
 uniffi::setup_scaffolding!();
 
@@ -52,6 +55,13 @@ pub enum OtpHashAlgorithm {
     Sha512,
 }
 
+#[derive(uniffi::Enum, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum OtpType {
+    #[default]
+    Totp,
+    Steam,
+}
+
 #[derive(uniffi::Record, Serialize, Deserialize)]
 pub struct Account {
     pub id: i32,
@@ -62,6 +72,8 @@ pub struct Account {
     pub secret_key: String,
     pub algorithm: OtpHashAlgorithm,
     pub has_otp: bool,
+    #[serde(default)]
+    pub otp_type: OtpType,
 }
 
 #[derive(uniffi::Record)]
@@ -207,6 +219,58 @@ pub fn generate_totp(secret: String, algo: OtpHashAlgorithm, digits: u32, period
     Ok(format!("{:0>width$}", code, width = digits as usize))
 }
 
+const STEAM_GUARD_ALPHABET: &[u8] = b"23456789BCDFGHJKMNPQRTVWXY";
+
+/// Generate the five-character code used by Steam Guard for account login.
+///
+/// Steam shared secrets are Base64-encoded, unlike regular TOTP secrets,
+/// which are Base32-encoded. The caller is responsible for keeping the
+/// device clock synchronized because this offline implementation deliberately
+/// does not contact Steam's time endpoint.
+#[uniffi::export]
+pub fn generate_steam_guard_code(shared_secret: String) -> Result<String, CryptoError> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| CryptoError::TotpFailed)?
+        .as_secs();
+
+    generate_steam_guard_code_at(&shared_secret, timestamp)
+}
+
+fn generate_steam_guard_code_at(shared_secret: &str, timestamp: u64) -> Result<String, CryptoError> {
+    let clean_secret: String = shared_secret
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+
+    if clean_secret.is_empty() {
+        return Err(CryptoError::InvalidData);
+    }
+
+    let secret_bytes = general_purpose::STANDARD
+        .decode(&clean_secret)
+        .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(&clean_secret))
+        .map_err(|_| CryptoError::InvalidData)?;
+
+    let hmac_result = compute_hmac::<Hmac<Sha1>>(&secret_bytes, timestamp / 30);
+    let offset = (hmac_result[hmac_result.len() - 1] & 0x0f) as usize;
+    let mut code_point = u32::from_be_bytes([
+        hmac_result[offset],
+        hmac_result[offset + 1],
+        hmac_result[offset + 2],
+        hmac_result[offset + 3],
+    ]) & 0x7fff_ffff;
+
+    let mut code = String::with_capacity(5);
+    for _ in 0..5 {
+        let index = (code_point % STEAM_GUARD_ALPHABET.len() as u32) as usize;
+        code.push(STEAM_GUARD_ALPHABET[index] as char);
+        code_point /= STEAM_GUARD_ALPHABET.len() as u32;
+    }
+
+    Ok(code)
+}
+
 fn compute_hmac<D: Mac + MacKeyInit>(key: &[u8], counter: u64) -> Vec<u8> {
     let mut mac = <D as MacKeyInit>::new_from_slice(key).expect("HMAC should accept any key size");
     mac.update(&counter.to_be_bytes());
@@ -238,4 +302,55 @@ fn derive_master_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LENGTH], Cr
         return Err(CryptoError::InvalidData);
     }
     Ok(derive_key(password, salt))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steam_guard_matches_known_vector() {
+        // RFC 4226 test secret encoded as Base64. At timestamp 59 the
+        // underlying HMAC-SHA1 value is independently known and the Steam
+        // alphabet conversion yields PV9M4.
+        let code = generate_steam_guard_code_at(
+            "MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=",
+            59,
+        )
+        .expect("valid Steam shared secret");
+
+        assert_eq!(code, "PV9M4");
+    }
+
+    #[test]
+    fn steam_guard_accepts_unpadded_and_spaced_base64() {
+        let padded = generate_steam_guard_code_at(
+            "MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=",
+            59,
+        )
+        .expect("valid padded secret");
+        let unpadded = generate_steam_guard_code_at(
+            "MTIzNDU2Nzg5 MDEyMzQ1Njc4OTA",
+            59,
+        )
+        .expect("valid unpadded secret");
+
+        assert_eq!(padded, unpadded);
+    }
+
+    #[test]
+    fn steam_guard_rejects_invalid_secret() {
+        assert!(matches!(
+            generate_steam_guard_code_at("not-base64!", 59),
+            Err(CryptoError::InvalidData)
+        ));
+    }
+
+    #[test]
+    fn legacy_account_json_defaults_to_totp() {
+        let json = r#"[{"id":1,"name":"Example","username":"user","password":"password","icon_initial":"E","secret_key":"JBSWY3DPEHPK3PXP","algorithm":"Sha1","has_otp":true}]"#;
+        let accounts = json_to_accounts(json.to_owned()).expect("legacy JSON remains readable");
+
+        assert_eq!(accounts[0].otp_type, OtpType::Totp);
+    }
 }
