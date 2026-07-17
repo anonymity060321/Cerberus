@@ -199,11 +199,17 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                 if (currentIndex == -1) {
                     resetDragState()
                 } else {
+                    val anchorIndex = lazyListState.firstVisibleItemIndex
+                    val anchorOffset = lazyListState.firstVisibleItemScrollOffset
                     val reordered = currentOrder.toMutableList()
                     val dragged = reordered.removeAt(currentIndex)
                     reordered.add(target, dragged)
                     dragOrder = reordered
                     dragTargetIndex = target
+                    // Keep the numeric viewport anchor while the stable dragged-item
+                    // key moves. This prevents Compose from preserving the former
+                    // first item's key and pushing slot 0 or slot 1 out of view.
+                    lazyListState.requestScrollToItem(anchorIndex, anchorOffset)
                 }
             }
         }
