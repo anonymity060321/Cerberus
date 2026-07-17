@@ -13,6 +13,7 @@ use base64::{Engine as _, engine::general_purpose};
 use thiserror::Error;
 use data_encoding::BASE32_NOPAD;
 use serde::{Serialize, Deserialize};
+use subtle::ConstantTimeEq;
 
 mod passkey;
 pub use passkey::{
@@ -33,6 +34,7 @@ const IV_LENGTH: usize = 12;
 const BACKUP_SALT_LENGTH: usize = 16;
 const MASTER_SALT_LENGTH: usize = 32;
 const BACKUP_VERSION: u8 = 1;
+const BACKUP_MAGIC: &[u8; 4] = b"CERB";
 
 #[derive(Error, uniffi::Error, Debug)]
 pub enum CryptoError {
@@ -104,6 +106,10 @@ pub fn json_to_accounts(json: String) -> Result<Vec<Account>, CryptoError> {
 
 #[uniffi::export]
 pub fn encrypt_backup(data: String, password: String) -> Result<String, CryptoError> {
+    if password.is_empty() {
+        return Err(CryptoError::InvalidParameter);
+    }
+
     let mut salt = [0u8; BACKUP_SALT_LENGTH];
     let mut iv = [0u8; IV_LENGTH];
     thread_rng().fill_bytes(&mut salt);
@@ -117,7 +123,10 @@ pub fn encrypt_backup(data: String, password: String) -> Result<String, CryptoEr
         .encrypt(nonce, data.as_bytes())
         .map_err(|_| CryptoError::EncryptionFailed)?;
 
-    let mut combined = Vec::with_capacity(1 + BACKUP_SALT_LENGTH + IV_LENGTH + ciphertext.len());
+    let mut combined = Vec::with_capacity(
+        BACKUP_MAGIC.len() + 1 + BACKUP_SALT_LENGTH + IV_LENGTH + ciphertext.len()
+    );
+    combined.extend_from_slice(BACKUP_MAGIC);
     combined.push(BACKUP_VERSION);
     combined.extend_from_slice(&salt);
     combined.extend_from_slice(&iv);
@@ -128,33 +137,80 @@ pub fn encrypt_backup(data: String, password: String) -> Result<String, CryptoEr
 
 #[uniffi::export]
 pub fn decrypt_backup(encrypted_base64: String, password: String) -> Result<String, CryptoError> {
+    if password.is_empty() {
+        return Err(CryptoError::InvalidParameter);
+    }
+
     let combined = general_purpose::STANDARD
         .decode(encrypted_base64)
         .map_err(|_| CryptoError::InvalidData)?;
 
-    // 支持旧格式（无版本前缀）与新格式（首字节为版本号）
-    let (salt, iv, ciphertext) = if combined.len() >= 1 + BACKUP_SALT_LENGTH + IV_LENGTH + 1 {
-        let version = combined[0];
+    // Current backups use an explicit magic header. Files without the header are
+    // parsed as the legacy salt + IV + ciphertext format. Version-1 backups made
+    // before the magic header was introduced are tried first, then the truly
+    // legacy format is attempted. Trying both avoids confusing a random legacy
+    // salt byte of 0x01 with the old version prefix.
+    if combined.starts_with(BACKUP_MAGIC) {
+        let minimum = BACKUP_MAGIC.len() + 1 + BACKUP_SALT_LENGTH + IV_LENGTH + 1;
+        if combined.len() < minimum {
+            return Err(CryptoError::InvalidData);
+        }
+        let version = combined[BACKUP_MAGIC.len()];
         if version != BACKUP_VERSION {
             return Err(CryptoError::UnsupportedVersion);
         }
+        let salt_start = BACKUP_MAGIC.len() + 1;
+        let iv_start = salt_start + BACKUP_SALT_LENGTH;
+        let cipher_start = iv_start + IV_LENGTH;
+        return decrypt_backup_payload(
+            &password,
+            &combined[salt_start..iv_start],
+            &combined[iv_start..cipher_start],
+            &combined[cipher_start..],
+        );
+    }
+
+    if combined.first() == Some(&BACKUP_VERSION)
+        && combined.len() >= 1 + BACKUP_SALT_LENGTH + IV_LENGTH + 1
+    {
         let salt_start = 1;
         let iv_start = salt_start + BACKUP_SALT_LENGTH;
         let cipher_start = iv_start + IV_LENGTH;
-        (&combined[salt_start..iv_start], &combined[iv_start..cipher_start], &combined[cipher_start..])
-    } else {
-        if combined.len() < BACKUP_SALT_LENGTH + IV_LENGTH + 1 {
-            return Err(CryptoError::InvalidData);
+        if let Ok(decrypted) = decrypt_backup_payload(
+            &password,
+            &combined[salt_start..iv_start],
+            &combined[iv_start..cipher_start],
+            &combined[cipher_start..],
+        ) {
+            return Ok(decrypted);
         }
-        let salt_start = 0;
-        let iv_start = salt_start + BACKUP_SALT_LENGTH;
-        let cipher_start = iv_start + IV_LENGTH;
-        (&combined[salt_start..iv_start], &combined[iv_start..cipher_start], &combined[cipher_start..])
-    };
+    }
 
-    let key = derive_backup_key(&password, salt)?;
+    if combined.len() < BACKUP_SALT_LENGTH + IV_LENGTH + 1 {
+        return Err(CryptoError::InvalidData);
+    }
+    let iv_start = BACKUP_SALT_LENGTH;
+    let cipher_start = iv_start + IV_LENGTH;
+    decrypt_backup_payload(
+        &password,
+        &combined[..iv_start],
+        &combined[iv_start..cipher_start],
+        &combined[cipher_start..],
+    )
+}
+
+fn decrypt_backup_payload(
+    password: &str,
+    salt: &[u8],
+    iv: &[u8],
+    ciphertext: &[u8],
+) -> Result<String, CryptoError> {
+    let key = derive_backup_key(password, salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| CryptoError::InvalidKey)?;
-    let nonce = Nonce::from_slice(&iv);
+    if iv.len() != IV_LENGTH {
+        return Err(CryptoError::InvalidData);
+    }
+    let nonce = Nonce::from_slice(iv);
 
     let decrypted_bytes = cipher
         .decrypt(nonce, ciphertext)
@@ -186,7 +242,11 @@ pub fn verify_master_password(password: String, stored_hash_hex: String, salt_he
         Ok(h) => h,
         Err(_) => return false,
     };
-    hex::encode(current_hash) == stored_hash_hex
+    let stored_hash = match hex::decode(stored_hash_hex) {
+        Ok(hash) if hash.len() == KEY_LENGTH => hash,
+        _ => return false,
+    };
+    current_hash.as_slice().ct_eq(stored_hash.as_slice()).into()
 }
 
 // --- TOTP 生成逻辑 ---
@@ -200,7 +260,15 @@ pub fn generate_totp(secret: String, algo: OtpHashAlgorithm, digits: u32, period
         return Err(CryptoError::InvalidParameter);
     }
 
-    let clean_secret = secret.replace(" ", "").to_uppercase();
+    let clean_secret = secret
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>()
+        .trim_end_matches('=')
+        .to_uppercase();
+    if clean_secret.is_empty() {
+        return Err(CryptoError::InvalidData);
+    }
     let secret_bytes = BASE32_NOPAD.decode(clean_secret.as_bytes()).map_err(|_| CryptoError::InvalidData)?;
 
     let timestamp = std::time::SystemTime::now()
@@ -313,6 +381,78 @@ fn derive_master_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LENGTH], Cr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_backup(data: &str, password: &str, first_salt_byte: u8) -> String {
+        let mut salt = [7u8; BACKUP_SALT_LENGTH];
+        salt[0] = first_salt_byte;
+        let iv = [9u8; IV_LENGTH];
+        let key = derive_backup_key(password, &salt).expect("valid legacy salt");
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("valid key");
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&iv), data.as_bytes())
+            .expect("legacy encryption");
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&salt);
+        combined.extend_from_slice(&iv);
+        combined.extend_from_slice(&ciphertext);
+        general_purpose::STANDARD.encode(combined)
+    }
+
+    fn versioned_backup_without_magic(data: &str, password: &str) -> String {
+        let salt = [5u8; BACKUP_SALT_LENGTH];
+        let iv = [8u8; IV_LENGTH];
+        let key = derive_backup_key(password, &salt).expect("valid versioned salt");
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("valid key");
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&iv), data.as_bytes())
+            .expect("versioned encryption");
+        let mut combined = vec![BACKUP_VERSION];
+        combined.extend_from_slice(&salt);
+        combined.extend_from_slice(&iv);
+        combined.extend_from_slice(&ciphertext);
+        general_purpose::STANDARD.encode(combined)
+    }
+
+    #[test]
+    fn backup_round_trip_uses_magic_header() {
+        let encrypted = encrypt_backup("credential data".to_owned(), "password".to_owned())
+            .expect("encrypt backup");
+        let decoded = general_purpose::STANDARD.decode(&encrypted).expect("base64 backup");
+        assert!(decoded.starts_with(BACKUP_MAGIC));
+        assert_eq!(
+            decrypt_backup(encrypted, "password".to_owned()).expect("decrypt backup"),
+            "credential data"
+        );
+    }
+
+    #[test]
+    fn legacy_backup_is_readable_even_when_salt_starts_with_version_byte() {
+        let encrypted = legacy_backup("legacy data", "password", BACKUP_VERSION);
+        assert_eq!(
+            decrypt_backup(encrypted, "password".to_owned()).expect("decrypt legacy backup"),
+            "legacy data"
+        );
+    }
+
+    #[test]
+    fn versioned_backup_without_magic_is_still_readable() {
+        let encrypted = versioned_backup_without_magic("version one", "password");
+        assert_eq!(
+            decrypt_backup(encrypted, "password".to_owned())
+                .expect("decrypt old versioned backup"),
+            "version one"
+        );
+    }
+
+    #[test]
+    fn totp_accepts_padded_base32() {
+        assert!(generate_totp(
+            "JBSWY3DPEHPK3PXP====".to_owned(),
+            OtpHashAlgorithm::Sha1,
+            6,
+            30,
+        ).is_ok());
+    }
 
     #[test]
     fn steam_guard_matches_known_vector() {

@@ -1,7 +1,6 @@
 package com.yiran.cerberus.ui.home
 
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import android.view.autofill.AutofillManager
@@ -50,6 +49,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,30 +67,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.yiran.cerberus.passkey.PasskeyStore
+import com.yiran.cerberus.BuildConfig
 import com.yiran.cerberus.util.SecurityUtil
-import java.io.OutputStreamWriter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel()) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     
-    val versionName = remember {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.packageManager.getPackageInfo(
-                    context.packageName,
-                    PackageManager.PackageInfoFlags.of(0)
-                ).versionName
-            } else {
-                @Suppress("DEPRECATION")
-                context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.4.9"
-        } catch (_ : Exception) {
-            "1.4.9"
-        }
-    }
+    val versionName = BuildConfig.VERSION_NAME
 
     val isBiometricEnabled = remember {
         mutableStateOf(SecurityUtil.isBiometricEnabled(context))
@@ -102,6 +94,19 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         mutableLongStateOf(SecurityUtil.getAutoLockTime(context))
     }
     val showTimeMenu = remember { mutableStateOf(false) }
+    val passkeyCount = remember { mutableIntStateOf(PasskeyStore.count(context)) }
+    val legacyPasskeyCount = remember { mutableIntStateOf(PasskeyStore.legacyCount(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                passkeyCount.intValue = PasskeyStore.count(context)
+                legacyPasskeyCount.intValue = PasskeyStore.legacyCount(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val showExportDialog = remember { mutableStateOf(false) }
     val showImportDialog = remember { mutableStateOf(false) }
@@ -111,6 +116,14 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     val isUpdateCheckAllowed = remember { mutableStateOf(SecurityUtil.isUpdateCheckAllowed(context)) }
     val showConsentDialog = remember { mutableStateOf(false) }
     val isCheckingUpdate = remember { mutableStateOf(false) }
+
+    val storageError = homeViewModel.storageErrorMessage
+    LaunchedEffect(storageError) {
+        storageError?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            homeViewModel.consumeStorageError()
+        }
+    }
 
     val autofillAuthorizationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -134,19 +147,19 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri ->
         if (uri != null) {
-            try {
-                val encryptedData = homeViewModel.exportBackup(backupPassword.value)
-                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    OutputStreamWriter(outputStream).use { writer ->
-                        writer.write(encryptedData)
-                    }
+            val password = backupPassword.value
+            backupPassword.value = ""
+            homeViewModel.exportBackup(
+                context = context,
+                uri = uri,
+                password = password,
+                onSuccess = {
+                    Toast.makeText(context, "加密备份导出成功", Toast.LENGTH_SHORT).show()
+                },
+                onError = { message ->
+                    Toast.makeText(context, "导出失败: $message", Toast.LENGTH_SHORT).show()
                 }
-                Toast.makeText(context, "加密备份导出成功", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(context, "导出失败: ${e.message}", Toast.LENGTH_SHORT).show()
-            } finally {
-                backupPassword.value = ""
-            }
+            )
         } else {
             backupPassword.value = ""
         }
@@ -385,10 +398,10 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                     AboutItem(
                         icon = Icons.Default.Key,
                         label = "通行密钥服务",
-                        value = if (PasskeyStore.legacyCount(context) > 0) {
-                            "${PasskeyStore.legacyCount(context)} 个旧版"
+                        value = if (legacyPasskeyCount.intValue > 0) {
+                            "${legacyPasskeyCount.intValue} 个旧版"
                         } else {
-                            "${PasskeyStore.count(context)} 个 · 设置"
+                            "${passkeyCount.intValue} 个 · 设置"
                         },
                         onClick = {
                             val packageUri = "package:${context.packageName}".toUri()
@@ -536,7 +549,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                                     onResult = { hasUpdate, latest, downloadUrl ->
                                         isCheckingUpdate.value = false
                                         if (hasUpdate) {
-                                            val targetUrl = downloadUrl ?: "https://github.com/Ranpers/Cerberus/releases/latest"
+                                            val targetUrl = downloadUrl ?: "https://github.com/anonymity060321/Cerberus/releases/latest"
                                             val intent = Intent(Intent.ACTION_VIEW, targetUrl.toUri())
                                             context.startActivity(intent)
                                             val msg = if (downloadUrl != null) "发现新版本: v$latest，正在下载..." else "发现新版本: v$latest，正在跳转 GitHub..."

@@ -55,7 +55,8 @@ class CerberusAutofillService : AutofillService() {
             form.usernameId?.let { putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, it) }
             form.passwordId?.let { putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, it) }
             putExtra(AutofillAuthActivity.EXTRA_TARGET_LABEL, form.targetLabel)
-            putExtras(android.os.Bundle.EMPTY)
+            putExtra(AutofillAuthActivity.EXTRA_TARGET_KEY, form.targetKey)
+            putExtra(AutofillAuthActivity.EXTRA_TARGET_PACKAGE, form.targetPackage)
         }
         val requestCode = nextRequestCode.incrementAndGet()
         val pendingIntent = PendingIntent.getActivity(
@@ -141,7 +142,7 @@ class CerberusAutofillService : AutofillService() {
 
         val webDomain = nodes.firstNotNullOfOrNull { node ->
             node.webDomain?.trim()?.takeIf(String::isNotEmpty)
-        }
+        }?.lowercase(Locale.ROOT)
         val targetPackage = structure.activityComponent?.packageName ?: return null
         val appLabel = runCatching {
             val info = packageManager.getApplicationInfo(targetPackage, 0)
@@ -157,7 +158,9 @@ class CerberusAutofillService : AutofillService() {
             usernameId = usernameNode?.autofillId,
             passwordId = passwordNode?.autofillId,
             targetPackage = targetPackage,
-            targetLabel = webDomain?.let { "网站 $it" } ?: safeLabel
+            targetLabel = webDomain?.let { "网站 $it" } ?: safeLabel,
+            targetKey = webDomain?.let { "web:$it@app:$targetPackage" }
+                ?: "app:$targetPackage"
         )
     }
 
@@ -261,7 +264,8 @@ class CerberusAutofillService : AutofillService() {
         val usernameId: AutofillId?,
         val passwordId: AutofillId?,
         val targetPackage: String,
-        val targetLabel: String
+        val targetLabel: String,
+        val targetKey: String
     )
 
     private companion object {

@@ -32,18 +32,20 @@ class CerberusCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginCreateCredentialResponse, CreateCredentialException>
     ) {
+        if (cancellationSignal.isCanceled) return
         if (request !is BeginCreatePublicKeyCredentialRequest) {
             callback.onError(CreateCredentialUnknownException("Cerberus 仅支持 Passkey"))
             return
         }
 
+        val passkeyCount = PasskeyStore.count(applicationContext)
         val entry = CreateEntry.Builder(
             getString(com.yiran.cerberus.R.string.app_name),
             pendingIntent(PasskeyCreateActivity::class.java)
         )
             .setDescription("使用 Cerberus 的安全硬件保存通行密钥")
-            .setPublicKeyCredentialCount(PasskeyStore.count(applicationContext))
-            .setTotalCredentialCount(PasskeyStore.count(applicationContext))
+            .setPublicKeyCredentialCount(passkeyCount)
+            .setTotalCredentialCount(passkeyCount)
             .build()
 
         callback.onResult(
@@ -58,15 +60,19 @@ class CerberusCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginGetCredentialResponse, GetCredentialException>
     ) {
+        if (cancellationSignal.isCanceled) return
         val response = BeginGetCredentialResponse.Builder()
         var matchCount = 0
 
         request.beginGetCredentialOptions
             .filterIsInstance<BeginGetPublicKeyCredentialOption>()
             .forEach { option ->
-                val rpId = runCatching {
+                if (cancellationSignal.isCanceled) return
+                val requestedRpId = runCatching {
                     JSONObject(option.requestJson).getString("rpId")
                 }.getOrNull() ?: return@forEach
+                val rpId = NativeAppIdentity.normalizeRpId(requestedRpId)
+                    ?: return@forEach
                 val allowedIds = allowedCredentialIds(option.requestJson)
 
                 PasskeyStore.findForRp(applicationContext, rpId)
@@ -101,6 +107,7 @@ class CerberusCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<Void?, ClearCredentialException>
     ) {
+        if (cancellationSignal.isCanceled) return
         callback.onResult(null)
     }
 
@@ -124,7 +131,7 @@ class CerberusCredentialProviderService : CredentialProviderService() {
         buildSet {
             for (index in 0 until array.length()) {
                 val id = array.optJSONObject(index)?.optString("id").orEmpty()
-                if (id.isNotBlank()) add(id)
+                if (id.isNotBlank()) add(id.trimEnd('='))
             }
         }
     }.getOrDefault(emptySet())

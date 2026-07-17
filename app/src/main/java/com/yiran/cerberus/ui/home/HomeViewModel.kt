@@ -20,25 +20,31 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import uniffi.rust_core.Account
-import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.UnknownHostException
 import java.net.SocketTimeoutException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class HomeViewModel : ViewModel() {
     private val _accounts = mutableStateListOf<Account>()
     val accounts: List<Account> = _accounts
 
-    private var saveJob: Job? = null
     private var totpJob: Job? = null
+    private val saveMutex = Mutex()
+    private var saveVersion = 0L
+    private var persistedSaveVersion = 0L
 
     // UI state hoisted to ViewModel
     var isAddDialogVisible by mutableStateOf(false)
     var isDeleteDialogVisible by mutableStateOf(false)
     var isEditPasswordDialogVisible by mutableStateOf(false)
     var selectedAccount by mutableStateOf<Account?>(null)
+    var storageErrorMessage by mutableStateOf<String?>(null)
+        private set
 
     // TOTP state (precomputed codes)
     var totpProgress by mutableFloatStateOf(1f)
@@ -48,13 +54,21 @@ class HomeViewModel : ViewModel() {
 
     fun loadAccounts(context: Context) {
         viewModelScope.launch {
-            val loadedAccounts = withContext(Dispatchers.IO) {
-                SecurityUtil.loadAccounts(context)
+            try {
+                val loadedAccounts = withContext(Dispatchers.IO) {
+                    SecurityUtil.loadAccountsOrThrow(context)
+                }
+                val normalizedAccounts = ensureUniqueAccountIds(loadedAccounts)
+                _accounts.clear()
+                _accounts.addAll(normalizedAccounts)
+                if (normalizedAccounts != loadedAccounts) {
+                    SecurityUtil.clearAutofillBindings(context)
+                    scheduleSave(context)
+                }
+                startTotpTicker()
+            } catch (_: Exception) {
+                storageErrorMessage = "无法读取已保存的凭据，原数据尚未被覆盖"
             }
-            _accounts.clear()
-            _accounts.addAll(loadedAccounts)
-            // start TOTP updates whenever accounts load
-            startTotpTicker()
         }
     }
 
@@ -65,15 +79,20 @@ class HomeViewModel : ViewModel() {
                 totpProgress = TotpUtil.getProgress()
                 totpStep = System.currentTimeMillis() / 30000
 
-                withContext(Dispatchers.Default) {
-                    _accounts.filter { it.hasOtp && it.secretKey.isNotEmpty() }.forEach { acct ->
-                        try {
-                            val code = TotpUtil.generateCode(acct.secretKey, acct.algorithm, acct.otpType)
-                            _otpCodes[acct.id] = code
-                        } catch (_: Exception) {
-                        }
+                val otpAccounts = _accounts
+                    .filter { it.hasOtp && it.secretKey.isNotEmpty() }
+                    .toList()
+                val generatedCodes = withContext(Dispatchers.Default) {
+                    otpAccounts.associate { account ->
+                        account.id to TotpUtil.generateCode(
+                            account.secretKey,
+                            account.algorithm,
+                            account.otpType
+                        )
                     }
                 }
+                _otpCodes.clear()
+                _otpCodes.putAll(generatedCodes)
 
                 delay(1000)
             }
@@ -81,26 +100,46 @@ class HomeViewModel : ViewModel() {
     }
 
     private fun scheduleSave(context: Context) {
-        saveJob?.cancel()
-        saveJob = viewModelScope.launch {
-            delay(500)
-            withContext(Dispatchers.IO) {
-                SecurityUtil.saveAccounts(context, _accounts.toList())
+        val snapshot = _accounts.toList()
+        val version = ++saveVersion
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    saveMutex.withLock {
+                        if (version > persistedSaveVersion) {
+                            SecurityUtil.saveAccounts(context, snapshot)
+                            persistedSaveVersion = version
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                storageErrorMessage = "凭据保存失败，请勿卸载应用并尽快重试"
             }
         }
     }
 
     fun addAccount(context: Context, account: Account) {
-        _accounts.add(account)
+        val uniqueAccount = if (_accounts.any { it.id == account.id }) {
+            account.copy(id = nextAvailableId())
+        } else {
+            account
+        }
+        _accounts.add(uniqueAccount)
         scheduleSave(context)
         // ensure otpCodes updated
-        if (account.hasOtp && account.secretKey.isNotEmpty()) {
-            _otpCodes[account.id] = TotpUtil.generateCode(account.secretKey, account.algorithm, account.otpType)
+        if (uniqueAccount.hasOtp && uniqueAccount.secretKey.isNotEmpty()) {
+            _otpCodes[uniqueAccount.id] = TotpUtil.generateCode(
+                uniqueAccount.secretKey,
+                uniqueAccount.algorithm,
+                uniqueAccount.otpType
+            )
         }
     }
 
     fun deleteAccount(context: Context, account: Account) {
         _accounts.remove(account)
+        _otpCodes.remove(account.id)
+        SecurityUtil.removeAutofillBindingsForAccount(context, account.id)
         scheduleSave(context)
     }
 
@@ -142,9 +181,30 @@ class HomeViewModel : ViewModel() {
         scheduleSave(context)
     }
 
-    fun exportBackup(password: String): String {
-        val json = SecurityUtil.accountsToJson(_accounts.toList())
-        return SecurityUtil.encryptBackup(json, password)
+    fun exportBackup(
+        context: Context,
+        uri: Uri,
+        password: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val snapshot = _accounts.toList()
+        viewModelScope.launch {
+            try {
+                val encrypted = withContext(Dispatchers.Default) {
+                    val json = SecurityUtil.accountsToJson(snapshot)
+                    SecurityUtil.encryptBackup(json, password)
+                }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        OutputStreamWriter(output).use { writer -> writer.write(encrypted) }
+                    } ?: throw IllegalStateException("无法写入备份文件")
+                }
+                onSuccess()
+            } catch (exception: Exception) {
+                onError(exception.message ?: "备份导出失败")
+            }
+        }
     }
 
     fun importBackup(
@@ -158,18 +218,39 @@ class HomeViewModel : ViewModel() {
             try {
                 val encryptedContent = withContext(Dispatchers.IO) {
                     context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        BufferedReader(InputStreamReader(inputStream)).readText()
+                        val reader = InputStreamReader(inputStream)
+                        val buffer = CharArray(8 * 1024)
+                        buildString {
+                            while (true) {
+                                val read = reader.read(buffer)
+                                if (read < 0) break
+                                if (length + read > MAX_BACKUP_CHARACTERS) {
+                                    throw IllegalArgumentException("备份文件过大")
+                                }
+                                append(buffer, 0, read)
+                            }
+                        }
                     } ?: throw Exception("无法读取文件")
                 }
 
-                val json = SecurityUtil.decryptBackup(encryptedContent, password)
-                val importedAccounts = SecurityUtil.jsonToAccounts(json)
+                val importedAccounts = withContext(Dispatchers.Default) {
+                    val json = SecurityUtil.decryptBackup(encryptedContent, password)
+                    validateImportedAccounts(SecurityUtil.jsonToAccounts(json))
+                }
 
                 if (importedAccounts.isNotEmpty()) {
                     _accounts.clear()
-                    _accounts.addAll(importedAccounts)
+                    _accounts.addAll(ensureUniqueAccountIds(importedAccounts))
+                    SecurityUtil.clearAutofillBindings(context)
+                    val importedSnapshot = _accounts.toList()
+                    val importVersion = ++saveVersion
                     withContext(Dispatchers.IO) {
-                        SecurityUtil.saveAccounts(context, _accounts.toList())
+                        saveMutex.withLock {
+                            if (importVersion > persistedSaveVersion) {
+                                SecurityUtil.saveAccounts(context, importedSnapshot)
+                                persistedSaveVersion = importVersion
+                            }
+                        }
                     }
                     startTotpTicker()
                     onSuccess()
@@ -189,7 +270,10 @@ class HomeViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         totpJob?.cancel()
-        saveJob?.cancel()
+    }
+
+    fun consumeStorageError() {
+        storageErrorMessage = null
     }
 
     fun checkUpdate(
@@ -200,7 +284,7 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    val url = URL("https://api.github.com/repos/Ranpers/Cerberus/releases/latest")
+                    val url = URL(RELEASE_API_URL)
                     val connection = url.openConnection() as HttpURLConnection
                     connection.requestMethod = "GET"
                     connection.connectTimeout = 5000
@@ -251,5 +335,51 @@ class HomeViewModel : ViewModel() {
             if (latestParts[i] < currParts[i]) return false
         }
         return latestParts.size > currParts.size
+    }
+
+    private fun nextAvailableId(): Int {
+        val used = _accounts.mapTo(mutableSetOf()) { it.id }
+        var candidate = ((_accounts.maxOfOrNull { it.id.toLong() } ?: 0L) + 1L)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
+        while (candidate in used) {
+            candidate = if (candidate == Int.MAX_VALUE) Int.MIN_VALUE else candidate + 1
+        }
+        return candidate
+    }
+
+    private fun ensureUniqueAccountIds(accounts: List<Account>): List<Account> {
+        val used = mutableSetOf<Int>()
+        var candidate = (accounts.maxOfOrNull { it.id.toLong() } ?: 0L) + 1L
+        return accounts.map { account ->
+            if (used.add(account.id)) {
+                account
+            } else {
+                var replacement = candidate.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                while (!used.add(replacement)) {
+                    replacement = if (replacement == Int.MAX_VALUE) Int.MIN_VALUE else replacement + 1
+                }
+                candidate = replacement.toLong() + 1L
+                account.copy(id = replacement)
+            }
+        }
+    }
+
+    private fun validateImportedAccounts(accounts: List<Account>): List<Account> {
+        require(accounts.size <= MAX_IMPORTED_ACCOUNTS) { "备份中的凭据数量过多" }
+        accounts.forEach { account ->
+            require(account.name.length <= 256) { "备份包含过长的凭据名称" }
+            require(account.username.length <= 1_024) { "备份包含过长的用户名" }
+            require(account.password.length <= 65_536) { "备份包含过长的密码" }
+            require(account.secretKey.length <= 4_096) { "备份包含过长的验证密钥" }
+        }
+        return accounts
+    }
+
+    private companion object {
+        const val MAX_BACKUP_CHARACTERS = 4 * 1024 * 1024
+        const val MAX_IMPORTED_ACCOUNTS = 10_000
+        const val RELEASE_API_URL =
+            "https://api.github.com/repos/anonymity060321/Cerberus/releases/latest"
     }
 }

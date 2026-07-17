@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -68,6 +69,9 @@ import com.yiran.cerberus.ui.home.SettingsScreen
 import com.yiran.cerberus.ui.theme.CerberusTheme
 import com.yiran.cerberus.util.SecurityUtil
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -478,11 +482,13 @@ fun SplashPlaceholder() {
 @Composable
 fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val isFirstTime = remember { !SecurityUtil.isMasterPasswordSet(context) }
     
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var errorText by remember { mutableStateOf("") }
+    var isSubmitting by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -550,6 +556,7 @@ fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> 
 
         Button(
             onClick = {
+                if (isSubmitting) return@Button
                 if (password.isBlank()) {
                     errorText = "请输入密码"
                     return@Button
@@ -560,18 +567,39 @@ fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> 
                     } else if (password != confirmPassword) {
                         errorText = "两次输入的密码不匹配"
                     } else {
-                        SecurityUtil.setMasterPassword(context, password)
-                        onUnlockSuccess()
+                        val submittedPassword = password
+                        isSubmitting = true
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.Default) {
+                                    SecurityUtil.setMasterPassword(context, submittedPassword)
+                                }
+                            }.onSuccess {
+                                onUnlockSuccess()
+                            }.onFailure {
+                                errorText = "主密码保存失败，请重试"
+                            }
+                            isSubmitting = false
+                        }
                     }
                 } else {
-                    if (SecurityUtil.verifyMasterPassword(context, password)) {
-                        onUnlockSuccess()
-                    } else {
-                        errorText = "主密码不正确"
+                    val submittedPassword = password
+                    isSubmitting = true
+                    scope.launch {
+                        val verified = withContext(Dispatchers.Default) {
+                            SecurityUtil.verifyMasterPassword(context, submittedPassword)
+                        }
+                        if (verified) {
+                            onUnlockSuccess()
+                        } else {
+                            errorText = "主密码不正确"
+                        }
+                        isSubmitting = false
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isSubmitting
         ) {
             Text(if (isFirstTime) "设置并进入" else "验证解锁")
         }

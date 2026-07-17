@@ -47,6 +47,7 @@ object SecurityUtil {
     private const val KEY_SALT = "master_password_salt"
     private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
     private const val KEY_PASSWORD_AUTOFILL_ENABLED = "password_autofill_enabled"
+    private const val KEY_AUTOFILL_BINDINGS = "password_autofill_bindings"
     private const val KEY_ACCOUNTS = "stored_accounts"
     private const val KEY_TERMS_ACCEPTED = "terms_accepted"
 
@@ -113,22 +114,24 @@ object SecurityUtil {
     fun setTermsAccepted(context: Context) = getEncryptedPrefs(context).edit { putBoolean(KEY_TERMS_ACCEPTED, true) }
 
     fun saveAccounts(context: Context, accounts: List<Account>) {
-        try {
-            val json = rustAccountsToJson(accounts)
-            getEncryptedPrefs(context).edit { putString(KEY_ACCOUNTS, json) }
-        } catch (_: Exception) {
-            Log.e(TAG, "Serialization failed")
-        }
+        val json = rustAccountsToJson(accounts)
+        check(
+            getEncryptedPrefs(context)
+                .edit()
+                .putString(KEY_ACCOUNTS, json)
+                .commit()
+        ) { "Unable to persist credentials" }
     }
 
     fun loadAccounts(context: Context): List<Account> {
+        return runCatching { loadAccountsOrThrow(context) }
+            .onFailure { Log.e(TAG, "Deserialization failed", it) }
+            .getOrDefault(emptyList())
+    }
+
+    fun loadAccountsOrThrow(context: Context): List<Account> {
         val json = getEncryptedPrefs(context).getString(KEY_ACCOUNTS, null) ?: return emptyList()
-        return try {
-            rustJsonToAccounts(json)
-        } catch (_: Exception) {
-            Log.e(TAG, "Deserialization failed")
-            emptyList()
-        }
+        return rustJsonToAccounts(json)
     }
 
     fun accountsToJson(accounts: List<Account>): String = rustAccountsToJson(accounts)
@@ -164,10 +167,13 @@ object SecurityUtil {
 
     fun setMasterPassword(context: Context, password: String) {
         val result = rustHashMasterPassword(password)
-        getEncryptedPrefs(context).edit {
-            putString(KEY_MASTER_PASSWORD_HASH, result.hash)
-            putString(KEY_SALT, result.salt)
-        }
+        check(
+            getEncryptedPrefs(context)
+                .edit()
+                .putString(KEY_MASTER_PASSWORD_HASH, result.hash)
+                .putString(KEY_SALT, result.salt)
+                .commit()
+        ) { "Unable to persist master password" }
     }
 
     fun verifyMasterPassword(context: Context, password: String): Boolean {
@@ -183,12 +189,63 @@ object SecurityUtil {
         ) == BiometricManager.BIOMETRIC_SUCCESS
     }
 
-    fun setBiometricEnabled(context: Context, enabled: Boolean) = getEncryptedPrefs(context).edit { putBoolean(KEY_BIOMETRIC_ENABLED, enabled) }
+    fun setBiometricEnabled(context: Context, enabled: Boolean) {
+        check(
+            getEncryptedPrefs(context)
+                .edit()
+                .putBoolean(KEY_BIOMETRIC_ENABLED, enabled)
+                .commit()
+        ) { "Unable to persist biometric preference" }
+    }
     fun isBiometricEnabled(context: Context): Boolean = getEncryptedPrefs(context).getBoolean(KEY_BIOMETRIC_ENABLED, false)
 
-    fun setPasswordAutofillEnabled(context: Context, enabled: Boolean) =
-        getEncryptedPrefs(context).edit { putBoolean(KEY_PASSWORD_AUTOFILL_ENABLED, enabled) }
+    fun setPasswordAutofillEnabled(context: Context, enabled: Boolean) {
+        val editor = getEncryptedPrefs(context)
+            .edit()
+            .putBoolean(KEY_PASSWORD_AUTOFILL_ENABLED, enabled)
+        if (!enabled) {
+            editor.remove(KEY_AUTOFILL_BINDINGS)
+        }
+        check(editor.commit()) { "Unable to persist autofill preference" }
+    }
 
     fun isPasswordAutofillEnabled(context: Context): Boolean =
         getEncryptedPrefs(context).getBoolean(KEY_PASSWORD_AUTOFILL_ENABLED, false)
+
+    fun isAutofillAccountBound(context: Context, targetKey: String, accountId: Int): Boolean =
+        autofillBindingToken(targetKey, accountId) in
+            getEncryptedPrefs(context)
+                .getStringSet(KEY_AUTOFILL_BINDINGS, emptySet<String>())
+                .orEmpty()
+
+    fun bindAutofillAccount(context: Context, targetKey: String, accountId: Int) {
+        require(targetKey.length in 1..512) { "Invalid autofill target" }
+        val prefs = getEncryptedPrefs(context)
+        val bindings = prefs.getStringSet(KEY_AUTOFILL_BINDINGS, emptySet<String>())
+            .orEmpty()
+            .toMutableSet()
+        bindings += autofillBindingToken(targetKey, accountId)
+        check(
+            prefs.edit()
+                .putStringSet(KEY_AUTOFILL_BINDINGS, bindings)
+                .commit()
+        ) { "Unable to persist autofill binding" }
+    }
+
+    fun removeAutofillBindingsForAccount(context: Context, accountId: Int) {
+        val prefs = getEncryptedPrefs(context)
+        val suffix = "|$accountId"
+        val bindings = prefs.getStringSet(KEY_AUTOFILL_BINDINGS, emptySet<String>())
+            .orEmpty()
+            .filterNot { it.endsWith(suffix) }
+            .toSet()
+        prefs.edit().putStringSet(KEY_AUTOFILL_BINDINGS, bindings).apply()
+    }
+
+    fun clearAutofillBindings(context: Context) {
+        getEncryptedPrefs(context).edit().remove(KEY_AUTOFILL_BINDINGS).apply()
+    }
+
+    private fun autofillBindingToken(targetKey: String, accountId: Int): String =
+        "$targetKey|$accountId"
 }

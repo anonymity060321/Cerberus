@@ -11,17 +11,21 @@ android {
         applicationId = "com.yiran.cerberus"
         minSdk = 35
         targetSdk = 36
-        versionCode = 22
-        versionName = "1.4.9"
+        versionCode = 23
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     ndkVersion = "29.0.14206865"
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     sourceSets {
         getByName("main") {
-            jniLibs.srcDir("src/main/jniLibs")
+            jniLibs.directories.add("src/main/jniLibs")
         }
     }
 
@@ -55,6 +59,13 @@ tasks.register<Exec>("cargoBuildAndroid") {
     group = "build"
     description = "Compile Rust library for Android"
     workingDir = file("../rust")
+    inputs.files(
+        fileTree("../rust/src"),
+        file("../rust/Cargo.toml"),
+        file("../rust/Cargo.lock"),
+        file("../rust/build.rs")
+    )
+    outputs.dir(file("src/main/jniLibs"))
     
     val ndkPath = ndkDirProvider.getOrElse(System.getenv("ANDROID_NDK_HOME") ?: "")
     environment("ANDROID_NDK_HOME", ndkPath)
@@ -77,6 +88,8 @@ tasks.register<Exec>("generateUniFFIBindings") {
     description = "Generate Kotlin bindings using UniFFI"
     dependsOn("cargoBuildAndroid")
     workingDir = file("../rust")
+    inputs.file(file("../rust/target/aarch64-linux-android/release/librust_core.so"))
+    outputs.dir(file("src/main/java/uniffi"))
     
     commandLine(
         "cargo", "run", "--bin", "uniffi-bindgen", 
@@ -86,13 +99,14 @@ tasks.register<Exec>("generateUniFFIBindings") {
     )
 }
 
-project.afterEvaluate {
-    tasks.findByName("preBuild")?.dependsOn("generateUniFFIBindings")
+tasks.named("preBuild") {
+    dependsOn("generateUniFFIBindings")
 }
 
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)

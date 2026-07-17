@@ -53,11 +53,16 @@ object PasskeyStore {
         require(PasskeyKeyStore.contains(passkey.keyAlias)) {
             "Passkey hardware key is missing"
         }
-        val current = loadAll(context)
+        val allPasskeys = loadAll(context)
+        val existing = allPasskeys.firstOrNull { it.credentialId == passkey.credentialId }
+        val current = allPasskeys
             .filterNot { it.credentialId == passkey.credentialId }
             .toMutableList()
         current.add(passkey)
         writeAll(context, current)
+        if (existing != null && existing.keyAlias != passkey.keyAlias) {
+            PasskeyKeyStore.delete(existing.keyAlias)
+        }
     }
 
     @Synchronized

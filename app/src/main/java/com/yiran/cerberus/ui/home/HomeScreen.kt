@@ -12,6 +12,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -95,12 +96,11 @@ import com.yiran.cerberus.util.OtpAlgorithm
 import com.yiran.cerberus.util.PasswordGenerator
 import com.yiran.cerberus.util.TotpUtil
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import uniffi.rust_core.Account
 import uniffi.rust_core.OtpType
-
-private const val DRAG_PLACEHOLDER_KEY = "cerberus-drag-placeholder"
 
 @Composable
 fun Modifier.dragToReorder(
@@ -163,39 +163,19 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
     val lazyListState = rememberLazyListState()
     var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
     var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
-    var draggedItemKey by remember { mutableStateOf<Any?>(null) }
+    var draggedItemKey by remember { mutableStateOf<Int?>(null) }
     var draggedItemStartOffsetPx by remember { mutableFloatStateOf(0f) }
     var draggedItemSizePx by remember { mutableFloatStateOf(0f) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var isDraggingActive by remember { mutableStateOf(false) }
+    var autoScrollDirection by remember { mutableFloatStateOf(0f) }
+    var dragOrder by remember { mutableStateOf<List<Account>?>(null) }
+    val autoScrollEdgePx = with(density) { 72.dp.toPx() }
 
     val draggedAccount = draggedItemKey?.let { key ->
         accounts.firstOrNull { account -> account.id == key }
     }
-    val displayedAccounts: List<Account?> =
-        if (
-            isDraggingActive &&
-            draggedAccount != null &&
-            dragTargetIndex != null
-        ) {
-            val target = dragTargetIndex!!.coerceIn(0, accounts.lastIndex)
-            val remaining = accounts.filterNot { account ->
-                account.id == draggedItemKey
-            }
-            buildList<Account?>(accounts.size) {
-                var remainingIndex = 0
-                repeat(accounts.size) { slot ->
-                    if (slot == target) {
-                        add(null)
-                    } else {
-                        add(remaining[remainingIndex])
-                        remainingIndex += 1
-                    }
-                }
-            }
-        } else {
-            accounts.map { it }
-        }
+    val displayedAccounts = dragOrder ?: accounts
 
     val resetDragState = {
         draggedItemIndex = null
@@ -205,6 +185,28 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
         draggedItemSizePx = 0f
         dragOffset = 0f
         isDraggingActive = false
+        autoScrollDirection = 0f
+        dragOrder = null
+    }
+    val updateDragTarget: (Int) -> Unit = { requestedTarget ->
+        if (isDraggingActive && accounts.isNotEmpty()) {
+            val target = requestedTarget.coerceIn(0, accounts.lastIndex)
+            if (target != dragTargetIndex) {
+                val currentOrder = dragOrder.orEmpty()
+                val currentIndex = currentOrder.indexOfFirst {
+                    it.id == draggedItemKey
+                }
+                if (currentIndex == -1) {
+                    resetDragState()
+                } else {
+                    val reordered = currentOrder.toMutableList()
+                    val dragged = reordered.removeAt(currentIndex)
+                    reordered.add(target, dragged)
+                    dragOrder = reordered
+                    dragTargetIndex = target
+                }
+            }
+        }
     }
 
     // Read UI state from ViewModel
@@ -218,6 +220,42 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
 
     LaunchedEffect(Unit) {
         homeViewModel.loadAccounts(context)
+    }
+
+    val storageError = homeViewModel.storageErrorMessage
+    LaunchedEffect(storageError) {
+        storageError?.let { message ->
+            android.widget.Toast.makeText(
+                context,
+                message,
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            homeViewModel.consumeStorageError()
+        }
+    }
+
+    LaunchedEffect(isDraggingActive, autoScrollDirection) {
+        while (isDraggingActive && autoScrollDirection != 0f) {
+            val consumed = lazyListState.scrollBy(autoScrollDirection * 14f)
+            if (consumed == 0f) {
+                autoScrollDirection = 0f
+                break
+            }
+            val draggedCenter =
+                draggedItemStartOffsetPx + dragOffset + draggedItemSizePx / 2f
+            if (accounts.isNotEmpty()) {
+                lazyListState.layoutInfo.visibleItemsInfo
+                    .minByOrNull { item ->
+                        abs((item.offset + item.size / 2f) - draggedCenter)
+                    }
+                    ?.index
+                    ?.coerceIn(0, accounts.lastIndex)
+                    ?.let { target ->
+                        updateDragTarget(target)
+                    }
+            }
+            delay(16)
+        }
     }
 
     Scaffold(
@@ -265,6 +303,7 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                                     draggedItemStartOffsetPx = itemOffset.toFloat()
                                     draggedItemSizePx = itemSize.toFloat()
                                     dragOffset = 0f
+                                    dragOrder = accounts.toList()
                                     isDraggingActive = true
                                 }
                             },
@@ -282,28 +321,19 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                                     minimum,
                                     maximum.coerceAtLeast(minimum)
                                 )
-                            },
-                            onTargetChange = { requestedTarget ->
-                                if (isDraggingActive && accounts.isNotEmpty()) {
-                                    val target = requestedTarget.coerceIn(
-                                        0,
-                                        accounts.lastIndex
-                                    )
-                                    if (target != dragTargetIndex) {
-                                        val anchorIndex =
-                                            lazyListState.firstVisibleItemIndex
-                                        val anchorOffset =
-                                            lazyListState.firstVisibleItemScrollOffset
-                                        dragTargetIndex = target
-                                        // Prefer the same viewport index over key anchoring. This is
-                                        // essential when the placeholder enters slot 0 or slot 1.
-                                        lazyListState.requestScrollToItem(
-                                            anchorIndex,
-                                            anchorOffset
-                                        )
-                                    }
+                                val draggedCenter =
+                                    draggedItemStartOffsetPx +
+                                        dragOffset +
+                                        draggedItemSizePx / 2f
+                                autoScrollDirection = when {
+                                    draggedCenter <
+                                        layoutInfo.viewportStartOffset + autoScrollEdgePx -> -1f
+                                    draggedCenter >
+                                        layoutInfo.viewportEndOffset - autoScrollEdgePx -> 1f
+                                    else -> 0f
                                 }
                             },
+                            onTargetChange = updateDragTarget,
                             onDragEnd = {
                                 val from = draggedItemIndex
                                 val target = dragTargetIndex
@@ -318,15 +348,11 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                                     val placeholderOffset =
                                         lazyListState.layoutInfo.visibleItemsInfo
                                             .firstOrNull { item ->
-                                                item.index == target
+                                                item.key == draggedItemKey
                                             }
                                             ?.offset
                                             ?.toFloat()
                                             ?: draggedItemStartOffsetPx
-                                    val anchorIndex =
-                                        lazyListState.firstVisibleItemIndex
-                                    val anchorOffset =
-                                        lazyListState.firstVisibleItemScrollOffset
 
                                     scope.launch {
                                         Animatable(dragOffset).animateTo(
@@ -340,10 +366,6 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                                             // Integer-pixel placement is applied by Modifier.offset.
                                             dragOffset = value
                                         }
-                                        lazyListState.requestScrollToItem(
-                                            anchorIndex,
-                                            anchorOffset
-                                        )
                                         if (target != from) {
                                             homeViewModel.moveAccount(
                                                 context,
@@ -367,11 +389,9 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                 ) {
                     itemsIndexed(
                         displayedAccounts,
-                        key = { _, account ->
-                            account?.id ?: DRAG_PLACEHOLDER_KEY
-                        }
+                        key = { _, account -> account.id }
                     ) { _, account ->
-                        if (account == null) {
+                        if (isDraggingActive && account.id == draggedItemKey) {
                             Spacer(
                                 modifier = Modifier
                                     .fillMaxWidth()

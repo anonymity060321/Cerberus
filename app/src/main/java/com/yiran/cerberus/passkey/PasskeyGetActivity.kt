@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Base64
 import android.view.WindowManager
+import android.util.Log
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.credentials.GetCredentialResponse
@@ -72,7 +73,8 @@ class PasskeyGetActivity : FragmentActivity() {
                 )
             }
         } catch (exception: Exception) {
-            fail("准备通行密钥签名失败: ${exception.message ?: "未知错误"}")
+            Log.e(TAG, "Unable to prepare passkey assertion", exception)
+            fail("无法准备通行密钥登录，请重试")
         }
     }
 
@@ -104,7 +106,8 @@ class PasskeyGetActivity : FragmentActivity() {
             setResult(Activity.RESULT_OK, result)
             finish()
         } catch (exception: Exception) {
-            fail("通行密钥签名失败: ${exception.message ?: "未知错误"}")
+            Log.e(TAG, "Unable to complete passkey assertion", exception)
+            fail("通行密钥签名失败，请重试")
         }
     }
 
@@ -158,5 +161,9 @@ class PasskeyGetActivity : FragmentActivity() {
         )
         setResult(Activity.RESULT_OK, result)
         finish()
+    }
+
+    private companion object {
+        const val TAG = "PasskeyGet"
     }
 }

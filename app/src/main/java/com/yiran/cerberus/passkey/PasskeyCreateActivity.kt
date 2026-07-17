@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
+import android.util.Log
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.credentials.CreatePublicKeyCredentialRequest
@@ -28,9 +29,11 @@ class PasskeyCreateActivity : FragmentActivity() {
             ?: return fail("不支持的凭据类型")
         val callingAppInfo = providerRequest.callingAppInfo
             ?: return fail("调用应用身份缺失")
-        val rpId = runCatching {
+        val requestedRpId = runCatching {
             JSONObject(request.requestJson).getJSONObject("rp").getString("id")
         }.getOrNull() ?: return fail("通行密钥请求信息不完整")
+        val rpId = NativeAppIdentity.normalizeRpId(requestedRpId)
+            ?: return fail("通行密钥请求包含无效的服务域名")
 
         lifecycleScope.launch {
             if (!NativeAppIdentity.verifyRpAssociation(rpId, callingAppInfo)) {
@@ -50,6 +53,17 @@ class PasskeyCreateActivity : FragmentActivity() {
         var keyMaterial: HardwareKeyMaterial? = null
         var storedCredentialId: String? = null
         try {
+            val rpId = NativeAppIdentity.normalizeRpId(
+                JSONObject(request.requestJson).getJSONObject("rp").getString("id")
+            ) ?: throw IllegalArgumentException("Invalid RP ID")
+            val excludedIds = excludedCredentialIds(request.requestJson)
+            if (
+                PasskeyStore.findForRp(this, rpId)
+                    .any { passkey -> passkey.credentialId in excludedIds }
+            ) {
+                fail("该账号已经保存过通行密钥")
+                return
+            }
             val generatedKeyMaterial = PasskeyKeyStore.createKeyMaterial()
             keyMaterial = generatedKeyMaterial
             val created = createPasskey(
@@ -84,9 +98,21 @@ class PasskeyCreateActivity : FragmentActivity() {
         } catch (exception: Exception) {
             storedCredentialId?.let { PasskeyStore.remove(this, it) }
             keyMaterial?.let { PasskeyKeyStore.delete(it.alias) }
-            fail("创建通行密钥失败: ${exception.message ?: "未知错误"}")
+            Log.e(TAG, "Passkey creation failed", exception)
+            fail("创建通行密钥失败，请重试")
         }
     }
+
+    private fun excludedCredentialIds(requestJson: String): Set<String> = runCatching {
+        val array = JSONObject(requestJson).optJSONArray("excludeCredentials")
+            ?: return@runCatching emptySet()
+        buildSet {
+            for (index in 0 until array.length()) {
+                val id = array.optJSONObject(index)?.optString("id").orEmpty()
+                if (id.isNotBlank()) add(id.trimEnd('='))
+            }
+        }
+    }.getOrDefault(emptySet())
 
     private fun authenticate(onSuccess: () -> Unit) {
         val authenticators =
@@ -131,5 +157,9 @@ class PasskeyCreateActivity : FragmentActivity() {
         )
         setResult(Activity.RESULT_OK, result)
         finish()
+    }
+
+    private companion object {
+        const val TAG = "PasskeyCreate"
     }
 }

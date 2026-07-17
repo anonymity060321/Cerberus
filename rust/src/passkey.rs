@@ -9,6 +9,7 @@ use serde_cbor::Value as CborValue;
 use serde_json::json;
 use sha2::Sha256;
 use std::collections::BTreeMap;
+use url::Host;
 
 const FLAG_USER_PRESENT: u8 = 0x01;
 const FLAG_USER_VERIFIED: u8 = 0x04;
@@ -87,9 +88,9 @@ pub fn create_passkey(
 ) -> Result<PasskeyCreationResult, CryptoError> {
     let options: PasskeyCreationOptions =
         serde_json::from_str(&request_json).map_err(|_| CryptoError::InvalidData)?;
+    let rp_id = normalize_rp_id(&options.rp.id)?;
 
-    if options.rp.id.is_empty()
-        || options.user.name.is_empty()
+    if options.user.name.is_empty()
         || origin.is_empty()
         || package_name.is_empty()
         || !options
@@ -126,7 +127,7 @@ pub fn create_passkey(
         &package_name,
     )?;
     let authenticator_data = build_creation_authenticator_data(
-        &options.rp.id,
+        &rp_id,
         &credential_id,
         &cose_public_key,
     );
@@ -148,7 +149,7 @@ pub fn create_passkey(
 
     Ok(PasskeyCreationResult {
         credential_id: encoded_credential_id,
-        rp_id: options.rp.id,
+        rp_id,
         user_id: encode_base64_url(&user_id),
         username: options.user.name,
         display_name: options.user.display_name,
@@ -169,29 +170,30 @@ pub fn prepare_passkey_assertion(
 ) -> Result<PasskeyAssertionPreparation, CryptoError> {
     let options: PasskeyRequestOptions =
         serde_json::from_str(&request_json).map_err(|_| CryptoError::InvalidData)?;
+    let request_rp_id = normalize_rp_id(&options.rp_id)?;
+    let stored_rp_id = normalize_rp_id(&expected_rp_id)?;
 
     if origin.is_empty()
         || package_name.is_empty()
-        || expected_rp_id.is_empty()
-        || options.rp_id != expected_rp_id
+        || request_rp_id != stored_rp_id
     {
         return Err(CryptoError::InvalidParameter);
     }
     if decode_base64_url(&options.challenge)?.is_empty() {
         return Err(CryptoError::InvalidData);
     }
-    if !options.allow_credentials.is_empty()
-        && !options
-            .allow_credentials
-            .iter()
-            .any(|descriptor| descriptor.id == credential_id)
-    {
-        return Err(CryptoError::InvalidData);
-    }
-
     let credential_id_bytes = decode_base64_url(&credential_id)?;
     let user_id_bytes = decode_base64_url(&user_id)?;
     if credential_id_bytes.is_empty() || user_id_bytes.is_empty() {
+        return Err(CryptoError::InvalidData);
+    }
+    if !options.allow_credentials.is_empty()
+        && !options.allow_credentials.iter().any(|descriptor| {
+            decode_base64_url(&descriptor.id)
+                .map(|candidate| candidate == credential_id_bytes)
+                .unwrap_or(false)
+        })
+    {
         return Err(CryptoError::InvalidData);
     }
 
@@ -201,7 +203,7 @@ pub fn prepare_passkey_assertion(
         &origin,
         &package_name,
     )?;
-    let authenticator_data = build_assertion_authenticator_data(&expected_rp_id);
+    let authenticator_data = build_assertion_authenticator_data(&stored_rp_id);
     let client_data_hash = Sha256::digest(client_data_json.as_bytes());
     let mut signed_data = Vec::with_capacity(authenticator_data.len() + client_data_hash.len());
     signed_data.extend_from_slice(&authenticator_data);
@@ -214,8 +216,9 @@ pub fn prepare_passkey_assertion(
     })
 }
 
-/// Validates the hardware-produced DER signature and assembles the WebAuthn
-/// response returned to Credential Manager.
+/// Validates the DER encoding of the hardware-produced signature and assembles
+/// the WebAuthn response returned to Credential Manager. Signature authenticity
+/// is provided by the authenticated Android Keystore Signature operation.
 #[uniffi::export]
 pub fn finish_passkey_response(
     credential_id: String,
@@ -346,6 +349,15 @@ fn decode_base64_url(value: &str) -> Result<Vec<u8>, CryptoError> {
         .map_err(|_| CryptoError::InvalidData)
 }
 
+fn normalize_rp_id(value: &str) -> Result<String, CryptoError> {
+    match Host::parse(value).map_err(|_| CryptoError::InvalidParameter)? {
+        Host::Domain(domain) if domain.contains('.') && domain.len() <= 253 => {
+            Ok(domain.to_ascii_lowercase())
+        }
+        _ => Err(CryptoError::InvalidParameter),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,15 +370,22 @@ mod tests {
     fn creation_request() -> String {
         json!({
             "challenge": encode_base64_url(b"registration challenge"),
-            "rp": {"id": "telegram.org", "name": "Telegram"},
+            "rp": {"id": "example.com", "name": "Example"},
             "user": {
-                "id": encode_base64_url(b"telegram-user-1"),
+                "id": encode_base64_url(b"example-user-1"),
                 "name": "+10000000000",
-                "displayName": "Telegram User"
+                "displayName": "Example User"
             },
             "pubKeyCredParams": [{"type": "public-key", "alg": -7}]
         })
         .to_string()
+    }
+
+    #[test]
+    fn rp_id_is_normalized_and_ip_literals_are_rejected() {
+        assert_eq!(normalize_rp_id("EXAMPLE.COM").unwrap(), "example.com");
+        assert!(normalize_rp_id("127.0.0.1").is_err());
+        assert!(normalize_rp_id("localhost").is_err());
     }
 
     #[test]
@@ -376,7 +395,7 @@ mod tests {
         let public_key_x = encode_base64_url(point.x().expect("x coordinate"));
         let public_key_y = encode_base64_url(point.y().expect("y coordinate"));
         let origin = "android:apk-key-hash:test-origin".to_owned();
-        let package_name = "org.telegram.messenger".to_owned();
+        let package_name = "com.example.client".to_owned();
 
         let created = create_passkey(
             creation_request(),
@@ -386,7 +405,7 @@ mod tests {
             public_key_y,
         )
         .expect("passkey creation succeeds");
-        assert_eq!(created.rp_id, "telegram.org");
+        assert_eq!(created.rp_id, "example.com");
 
         let creation_json: serde_json::Value =
             serde_json::from_str(&created.response_json).expect("valid creation JSON");
@@ -402,7 +421,7 @@ mod tests {
 
         let get_request = json!({
             "challenge": encode_base64_url(b"authentication challenge"),
-            "rpId": "telegram.org",
+            "rpId": "example.com",
             "allowCredentials": [{"type": "public-key", "id": created.credential_id.clone()}]
         })
         .to_string();

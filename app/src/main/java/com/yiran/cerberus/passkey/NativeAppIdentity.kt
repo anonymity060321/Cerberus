@@ -7,7 +7,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.URL
+import java.net.IDN
+import java.net.InetAddress
 import java.security.MessageDigest
+import java.util.Locale
 import javax.net.ssl.HttpsURLConnection
 
 object NativeAppIdentity {
@@ -26,9 +29,10 @@ object NativeAppIdentity {
 
     suspend fun verifyRpAssociation(rpId: String, callingAppInfo: CallingAppInfo): Boolean =
         withContext(Dispatchers.IO) {
-            if (!isValidRpId(rpId)) return@withContext false
+            val normalizedRpId = normalizeRpId(rpId) ?: return@withContext false
+            if (!hasPublicNetworkAddress(normalizedRpId)) return@withContext false
 
-            val connection = URL("https://$rpId/.well-known/assetlinks.json")
+            val connection = URL("https://$normalizedRpId/.well-known/assetlinks.json")
                 .openConnection() as HttpsURLConnection
             try {
                 connection.instanceFollowRedirects = false
@@ -111,14 +115,48 @@ object NativeAppIdentity {
             .digest(signature.toByteArray())
             .joinToString(":") { byte -> "%02X".format(byte.toInt() and 0xff) }
 
-    private fun isValidRpId(value: String): Boolean =
-        value.length in 1..253 &&
-            !value.startsWith('.') &&
-            !value.endsWith('.') &&
-            value.split('.').all { label ->
-                label.length in 1..63 &&
-                    !label.startsWith('-') &&
-                    !label.endsWith('-') &&
-                    label.all { it.isLetterOrDigit() || it == '-' }
+    fun normalizeRpId(value: String): String? = runCatching {
+        val ascii = IDN.toASCII(value.trim(), IDN.USE_STD3_ASCII_RULES)
+            .lowercase(Locale.ROOT)
+        val labels = ascii.split('.')
+        val isIpv4Literal = labels.size == 4 && labels.all { label ->
+            label.toIntOrNull()?.let { it in 0..255 } == true
+        }
+        if (
+            ascii.length !in 1..253 ||
+            '.' !in ascii ||
+            isIpv4Literal ||
+            ascii.startsWith('.') ||
+            ascii.endsWith('.') ||
+            labels.any { label ->
+                label.length !in 1..63 ||
+                    label.startsWith('-') ||
+                    label.endsWith('-') ||
+                    label.any { character ->
+                        character !in 'a'..'z' &&
+                            character !in '0'..'9' &&
+                            character != '-'
+                    }
             }
+        ) {
+            null
+        } else {
+            ascii
+        }
+    }.getOrNull()
+
+    private fun hasPublicNetworkAddress(host: String): Boolean = runCatching {
+        val addresses = InetAddress.getAllByName(host)
+        addresses.isNotEmpty() && addresses.all { address ->
+            !address.isAnyLocalAddress &&
+                !address.isLoopbackAddress &&
+                !address.isLinkLocalAddress &&
+                !address.isSiteLocalAddress &&
+                !address.isMulticastAddress &&
+                !isIpv6UniqueLocal(address.address)
+        }
+    }.getOrDefault(false)
+
+    private fun isIpv6UniqueLocal(bytes: ByteArray): Boolean =
+        bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
 }

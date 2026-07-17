@@ -7,20 +7,6 @@ import uniffi.rust_core.generateSteamGuardCode as rustGenerateSteamGuardCode
 import java.util.Base64
 
 object TotpUtil {
-
-    /**
-     * 直接使用 Rust 导出的 OtpHashAlgorithm
-     */
-    fun generateTOTP(secret: String, algorithm: OtpHashAlgorithm = OtpHashAlgorithm.SHA1): String {
-        return try {
-            // 调用 Rust 实现的标准 TOTP (RFC 6238)
-            rustGenerateTotp(secret, algorithm, 6.toUInt(), 30.toULong())
-        } catch (e: Exception) {
-            e.printStackTrace()
-            "ERROR"
-        }
-    }
-
     fun generateCode(
         secret: String,
         algorithm: OtpHashAlgorithm = OtpHashAlgorithm.SHA1,
@@ -31,8 +17,7 @@ object TotpUtil {
                 OtpType.TOTP -> rustGenerateTotp(secret, algorithm, 6.toUInt(), 30.toULong())
                 OtpType.STEAM -> rustGenerateSteamGuardCode(secret)
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
             "ERROR"
         }
     }
@@ -42,10 +27,14 @@ object TotpUtil {
      */
     fun isValidSecret(secret: String): Boolean {
         if (secret.isBlank()) return false
-        val cleanSecret = secret.trim().uppercase().replace(" ", "")
-        // Base32 字符集检查: A-Z, 2-7
-        val regex = "^[A-Z2-7]*={0,6}$".toRegex()
-        return regex.matches(cleanSecret)
+        val cleanSecret = secret
+            .filterNot(Char::isWhitespace)
+            .trimEnd('=')
+            .uppercase()
+        if (cleanSecret.isEmpty()) return false
+        return cleanSecret.all { character ->
+            character in 'A'..'Z' || character in '2'..'7'
+        }
     }
 
     fun isValidSteamSharedSecret(secret: String): Boolean {
@@ -74,8 +63,4 @@ object TotpUtil {
         return remaining / 30f
     }
 
-    fun getRemainingSeconds(): Long {
-        val time = System.currentTimeMillis() / 1000
-        return 30 - (time % 30)
-    }
 }
