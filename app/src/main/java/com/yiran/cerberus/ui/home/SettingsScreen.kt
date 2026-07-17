@@ -70,6 +70,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.yiran.cerberus.passkey.CredentialProviderController
+import com.yiran.cerberus.passkey.CredentialProviderStatus
 import com.yiran.cerberus.passkey.PasskeyStore
 import com.yiran.cerberus.util.SecurityUtil
 
@@ -100,17 +102,21 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     val showTimeMenu = remember { mutableStateOf(false) }
     val passkeyCount = remember { mutableIntStateOf(PasskeyStore.count(context)) }
     val legacyPasskeyCount = remember { mutableIntStateOf(PasskeyStore.legacyCount(context)) }
-    val isPasskeyProviderEnabled = remember {
-        mutableStateOf(isCerberusCredentialProviderEnabled(context))
+    val credentialProviderController = remember(context) {
+        CredentialProviderController(context)
     }
+    val credentialProviderStatus = remember {
+        mutableStateOf(credentialProviderController.currentStatus())
+    }
+    val showCredentialProviderDialog = remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 passkeyCount.intValue = PasskeyStore.count(context)
                 legacyPasskeyCount.intValue = PasskeyStore.legacyCount(context)
-                isPasskeyProviderEnabled.value =
-                    isCerberusCredentialProviderEnabled(context)
+                credentialProviderStatus.value =
+                    credentialProviderController.currentStatus()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -303,6 +309,64 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         )
     }
 
+    if (showCredentialProviderDialog.value) {
+        val status = credentialProviderStatus.value
+        StyledDialog(
+            onDismissRequest = { showCredentialProviderDialog.value = false },
+            title = "通行密钥服务状态",
+            content = {
+                Text(
+                    text = when (status) {
+                        CredentialProviderStatus.ENABLED ->
+                            "Cerberus 已被系统启用为通行密钥提供程序。"
+                        CredentialProviderStatus.AUTOFILL_ONLY ->
+                            "当前系统只启用了 Cerberus 的账号密码自动填充，" +
+                                "没有启用 Credential Manager 通行密钥提供程序。" +
+                                "Cerberus 无权自行修改这项受保护的系统设置。"
+                        CredentialProviderStatus.DISABLED ->
+                            "Cerberus 尚未被系统启用为通行密钥提供程序。"
+                        CredentialProviderStatus.SETTINGS_UNAVAILABLE ->
+                            "当前系统没有向第三方应用提供可用的通行密钥服务设置入口。"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                if (status == CredentialProviderStatus.SETTINGS_UNAVAILABLE) {
+                    TextButton(
+                        onClick = { showCredentialProviderDialog.value = false }
+                    ) { Text("知道了", fontWeight = FontWeight.Bold) }
+                } else {
+                    TextButton(
+                        onClick = {
+                            showCredentialProviderDialog.value = false
+                            if (
+                                !credentialProviderController
+                                    .openCredentialProviderSettings()
+                            ) {
+                                Toast.makeText(
+                                    context,
+                                    "系统未提供可用的通行密钥服务设置入口",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    ) { Text("打开系统设置", fontWeight = FontWeight.Bold) }
+                }
+            },
+            dismissButton = if (status != CredentialProviderStatus.SETTINGS_UNAVAILABLE) {
+                {
+                    TextButton(
+                        onClick = { showCredentialProviderDialog.value = false }
+                    ) { Text("关闭") }
+                }
+            } else {
+                null
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -408,27 +472,29 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                         icon = Icons.Default.Key,
                         label = "通行密钥服务",
                         value = if (legacyPasskeyCount.intValue > 0) {
-                            "${legacyPasskeyCount.intValue} 个旧版"
+                            "${legacyPasskeyCount.intValue} 旧版 · " +
+                                credentialProviderStatus.value.displayText
                         } else {
-                            val status = if (isPasskeyProviderEnabled.value) {
-                                "已启用"
-                            } else {
-                                "未启用"
-                            }
-                            "${passkeyCount.intValue} 个 · $status"
+                            "${passkeyCount.intValue} 个 · " +
+                                credentialProviderStatus.value.displayText
                         },
                         onClick = {
-                            runCatching {
-                                androidx.credentials.CredentialManager
-                                    .create(context)
-                                    .createSettingsPendingIntent()
-                                    .send()
-                            }.onFailure {
-                                Toast.makeText(
-                                    context,
-                                    "无法打开通行密钥服务设置",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                            when (credentialProviderStatus.value) {
+                                CredentialProviderStatus.AUTOFILL_ONLY,
+                                CredentialProviderStatus.SETTINGS_UNAVAILABLE -> {
+                                    showCredentialProviderDialog.value = true
+                                }
+                                CredentialProviderStatus.ENABLED,
+                                CredentialProviderStatus.DISABLED -> {
+                                    if (
+                                        !credentialProviderController
+                                            .openCredentialProviderSettings()
+                                    ) {
+                                        credentialProviderStatus.value =
+                                            credentialProviderController.currentStatus()
+                                        showCredentialProviderDialog.value = true
+                                    }
+                                }
                             }
                         }
                     )
@@ -647,18 +713,6 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         }
     }
 }
-
-private fun isCerberusCredentialProviderEnabled(
-    context: android.content.Context
-): Boolean = runCatching {
-    val manager =
-        context.getSystemService(android.credentials.CredentialManager::class.java)
-    val component = android.content.ComponentName(
-        context,
-        com.yiran.cerberus.passkey.CerberusCredentialProviderService::class.java
-    )
-    manager?.isEnabledCredentialProviderService(component) == true
-}.getOrDefault(false)
 
 @Composable
 fun AboutItem(
