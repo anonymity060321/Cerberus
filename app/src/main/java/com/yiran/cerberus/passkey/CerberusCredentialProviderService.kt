@@ -15,11 +15,14 @@ import androidx.credentials.provider.BeginCreateCredentialResponse
 import androidx.credentials.provider.BeginCreatePublicKeyCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialResponse
+import androidx.credentials.provider.BeginGetPasswordOption
 import androidx.credentials.provider.BeginGetPublicKeyCredentialOption
 import androidx.credentials.provider.CreateEntry
 import androidx.credentials.provider.CredentialProviderService
+import androidx.credentials.provider.PasswordCredentialEntry
 import androidx.credentials.provider.ProviderClearCredentialStateRequest
 import androidx.credentials.provider.PublicKeyCredentialEntry
+import com.yiran.cerberus.util.SecurityUtil
 import org.json.JSONObject
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
@@ -63,6 +66,33 @@ class CerberusCredentialProviderService : CredentialProviderService() {
         if (cancellationSignal.isCanceled) return
         val response = BeginGetCredentialResponse.Builder()
         var matchCount = 0
+
+        // Keep account metadata locked. HyperOS only sees one generic password entry; usernames and
+        // passwords are loaded after Cerberus authentication in AutofillAuthActivity.
+        request.beginGetCredentialOptions
+            .filterIsInstance<BeginGetPasswordOption>()
+            .forEach { option ->
+                if (cancellationSignal.isCanceled) return
+                if (
+                    !SecurityUtil.isPasswordAutofillEnabled(applicationContext) ||
+                    !SecurityUtil.isMasterPasswordSet(applicationContext) ||
+                    !hasMatchingPasswordCredential(option)
+                ) {
+                    return@forEach
+                }
+
+                val entry = PasswordCredentialEntry.Builder(
+                    applicationContext,
+                    getString(com.yiran.cerberus.R.string.app_name),
+                    passwordPendingIntent(),
+                    option
+                )
+                    .setDisplayName("验证后选择账号")
+                    .setAutoSelectAllowed(false)
+                    .build()
+                response.addCredentialEntry(entry)
+                matchCount++
+            }
 
         request.beginGetCredentialOptions
             .filterIsInstance<BeginGetPublicKeyCredentialOption>()
@@ -111,6 +141,20 @@ class CerberusCredentialProviderService : CredentialProviderService() {
         callback.onResult(null)
     }
 
+    private fun passwordPendingIntent(): PendingIntent {
+        val intent = Intent(applicationContext, AutofillAuthActivity::class.java)
+            .putExtra(
+                AutofillAuthActivity.EXTRA_MODE,
+                AutofillAuthActivity.MODE_CREDENTIAL_MANAGER_PASSWORD
+            )
+        return PendingIntent.getActivity(
+            applicationContext,
+            requestCode.incrementAndGet(),
+            intent,
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
     private fun pendingIntent(
         activityClass: Class<*>,
         extras: Bundle? = null
@@ -123,6 +167,15 @@ class CerberusCredentialProviderService : CredentialProviderService() {
             intent,
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+    }
+
+    private fun hasMatchingPasswordCredential(option: BeginGetPasswordOption): Boolean {
+        val allowedUserIds = option.allowedUserIds
+        return SecurityUtil.loadAccounts(applicationContext).any { account ->
+            account.username.isNotBlank() &&
+                account.password.isNotBlank() &&
+                (allowedUserIds.isEmpty() || account.username in allowedUserIds)
+        }
     }
 
     private fun allowedCredentialIds(requestJson: String): Set<String> = runCatching {
