@@ -20,10 +20,10 @@ android {
 
     defaultConfig {
         applicationId = "com.yiran.cerberus"
-        minSdk = 36
+        minSdk = 35
         targetSdk = 36
-        versionCode = 31
-        versionName = "1.6.0-alpha3"
+        versionCode = 32
+        versionName = "1.6.0-alpha4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
