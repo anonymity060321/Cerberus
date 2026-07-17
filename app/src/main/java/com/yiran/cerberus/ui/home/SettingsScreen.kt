@@ -84,9 +84,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.4.7"
+            } ?: "1.4.8"
         } catch (_ : Exception) {
-            "1.4.7"
+            "1.4.8"
         }
     }
 
@@ -257,7 +257,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "• 开启后，仅在您手动点击时访问 GitHub API 获取版本号\n• 我们郑重承诺：应用绝不会收集或上传您的任何令牌数据\n• 未经您的明确允许，应用绝不会在后台静默使用联网权限\n• 五字符动态验证码采用兼容协议在本机生成，不需要联网\n• 账号密码自动填充仅在您主动选择并完成身份验证后执行，不需要联网\n• 通行密钥仅在您主动创建或使用时进行必要的在线安全验证，私钥始终保留在本机安全硬件中",
+                        text = "• 开启后，仅在您手动点击时访问 GitHub API 获取版本号\n• 我们郑重承诺：应用绝不会收集或上传您的任何令牌数据\n• 未经您的明确允许，应用绝不会在后台静默使用联网权限\n• 支持 Steam 协议的登录验证码完全在本机生成，不需要联网\n• 账号密码自动填充仅在您主动选择并完成身份验证后执行，不需要联网\n• 通行密钥仅在您主动创建或使用时进行必要的在线安全验证，私钥始终保留在本机安全硬件中",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
