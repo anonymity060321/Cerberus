@@ -22,8 +22,8 @@ android {
         applicationId = "com.yiran.cerberus"
         minSdk = 36
         targetSdk = 36
-        versionCode = 30
-        versionName = "1.6.0-alpha2"
+        versionCode = 31
+        versionName = "1.6.0-alpha3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
