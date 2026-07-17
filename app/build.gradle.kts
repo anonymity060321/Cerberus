@@ -76,7 +76,7 @@ tasks.register<Exec>("cargoBuildAndroid") {
     targets.forEach { target ->
         args("-t", archMap[target]!!)
     }
-    args("-o", "${projectDir}/src/main/jniLibs", "build", "--release")
+    args("-o", "${projectDir}/src/main/jniLibs", "build", "--release", "--locked")
 }
 
 tasks.register<Exec>("generateUniFFIBindings") {
@@ -88,7 +88,7 @@ tasks.register<Exec>("generateUniFFIBindings") {
     outputs.dir(file("src/main/java/uniffi"))
     
     commandLine(
-        "cargo", "run", "--bin", "uniffi-bindgen", 
+        "cargo", "run", "--locked", "--bin", "uniffi-bindgen",
         "generate", "--library", "target/aarch64-linux-android/release/librust_core.so",
         "--language", "kotlin", 
         "--out-dir", "${projectDir}/src/main/java"
