@@ -2,8 +2,6 @@ package com.yiran.cerberus.ui.home
 
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.provider.Settings
-import android.view.autofill.AutofillManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -137,24 +135,6 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         storageError?.let { message ->
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             homeViewModel.consumeStorageError()
-        }
-    }
-
-    val autofillAuthorizationLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) {
-        val enabledBySystem = runCatching {
-            context.getSystemService(AutofillManager::class.java)
-                ?.hasEnabledAutofillServices() == true
-        }.getOrDefault(false)
-        if (!enabledBySystem) {
-            SecurityUtil.setPasswordAutofillEnabled(context, false)
-            isPasswordAutofillEnabled.value = false
-            Toast.makeText(
-                context,
-                "未在系统中启用 Cerberus，账号密码自动填充保持关闭",
-                Toast.LENGTH_SHORT
-            ).show()
         }
     }
 
@@ -319,10 +299,6 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                     text = when (status) {
                         CredentialProviderStatus.ENABLED ->
                             "Cerberus 已被系统启用为通行密钥提供程序。"
-                        CredentialProviderStatus.AUTOFILL_ONLY ->
-                            "当前系统只启用了 Cerberus 的账号密码自动填充，" +
-                                "没有启用 Credential Manager 通行密钥提供程序。" +
-                                "Cerberus 无权自行修改这项受保护的系统设置。"
                         CredentialProviderStatus.DISABLED ->
                             "Cerberus 尚未被系统启用为通行密钥提供程序。"
                         CredentialProviderStatus.SETTINGS_UNAVAILABLE ->
@@ -343,7 +319,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             showCredentialProviderDialog.value = false
                             if (
                                 !credentialProviderController
-                                    .openCredentialProviderSettings()
+                                    .openSettings()
                             ) {
                                 Toast.makeText(
                                     context,
@@ -479,22 +455,15 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                                 credentialProviderStatus.value.displayText
                         },
                         onClick = {
-                            when (credentialProviderStatus.value) {
-                                CredentialProviderStatus.AUTOFILL_ONLY,
-                                CredentialProviderStatus.SETTINGS_UNAVAILABLE -> {
-                                    showCredentialProviderDialog.value = true
-                                }
-                                CredentialProviderStatus.ENABLED,
-                                CredentialProviderStatus.DISABLED -> {
-                                    if (
-                                        !credentialProviderController
-                                            .openCredentialProviderSettings()
-                                    ) {
-                                        credentialProviderStatus.value =
-                                            credentialProviderController.currentStatus()
-                                        showCredentialProviderDialog.value = true
-                                    }
-                                }
+                            if (
+                                credentialProviderStatus.value ==
+                                    CredentialProviderStatus.SETTINGS_UNAVAILABLE
+                            ) {
+                                showCredentialProviderDialog.value = true
+                            } else if (!credentialProviderController.openSettings()) {
+                                credentialProviderStatus.value =
+                                    credentialProviderController.currentStatus()
+                                showCredentialProviderDialog.value = true
                             }
                         }
                     )
@@ -528,27 +497,19 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             onCheckedChange = { enabled ->
                                 SecurityUtil.setPasswordAutofillEnabled(context, enabled)
                                 isPasswordAutofillEnabled.value = enabled
-                                if (enabled) {
-                                    val enabledBySystem = runCatching {
-                                        context.getSystemService(AutofillManager::class.java)
-                                            ?.hasEnabledAutofillServices() == true
-                                    }.getOrDefault(false)
-                                    if (!enabledBySystem) {
-                                        runCatching {
-                                            autofillAuthorizationLauncher.launch(
-                                                Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
-                                                    data = "package:${context.packageName}".toUri()
-                                                }
-                                            )
-                                        }.onFailure {
-                                            SecurityUtil.setPasswordAutofillEnabled(context, false)
-                                            isPasswordAutofillEnabled.value = false
-                                            Toast.makeText(
-                                                context,
-                                                "无法请求系统自动填充授权",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
+                                if (
+                                    enabled &&
+                                    credentialProviderController.currentStatus() !=
+                                        CredentialProviderStatus.ENABLED
+                                ) {
+                                    if (!credentialProviderController.openSettings()) {
+                                        SecurityUtil.setPasswordAutofillEnabled(context, false)
+                                        isPasswordAutofillEnabled.value = false
+                                        Toast.makeText(
+                                            context,
+                                            "系统未提供可用的凭据服务设置入口",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 }
                             }
