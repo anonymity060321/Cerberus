@@ -43,7 +43,19 @@
 
 > 从 1.3.0 开始，Passkey 私钥改为硬件绑定且不可导出。旧版软件 Passkey 无法安全迁移：升级前请确保仍有另一种 Telegram 登录方式；升级后应在 Telegram 中删除旧 Passkey，再通过 Cerberus 重新创建。旧版私钥不会参与登录，并会在首次成功保存新硬件 Passkey 时从 Cerberus 存储中移除。
 
-> 小米 HyperOS 3 未实现标准 Credential Provider 启用入口。Cerberus 会通过仅用于兼容的 Autofill Service 出现在系统服务列表中；选择 Cerberus 可能替换当前默认密码自动填充服务，而兼容层本身不会读取、保存或填充普通密码。
+#### Xiaomi HyperOS 3 特殊情况
+
+HyperOS 3 的启用顺序与原生 Android 不同。仅在自动填充授权页选择 Cerberus，通常只会启用账号密码自动填充；此时 Cerberus 显示“仅自动填充”，并不代表系统已经启用 Cerberus 的 Passkey Credential Provider。
+
+要真正启用 Cerberus 通行密钥：
+
+1. 打开系统的“密码、通行密钥与自动填充”设置。
+2. 确认“首选服务”不是 Cerberus，也不是“无”；如果是，请先临时选择另一个可用服务。
+3. 进入“其他服务”，打开 Cerberus 开关。
+4. 返回上一页，再将“首选服务”设置为 Cerberus。
+5. 回到 Cerberus 设置页，确认“Passkey 凭据提供程序”显示“已启用”，然后再到 Telegram 创建 Passkey。
+
+如果状态仍为“仅自动填充”，说明 HyperOS 只启用了 Cerberus 的账号密码 Autofill Service，尚未真正启用通行密钥服务。
 
 ### 备份与恢复
 - **导出**：进入“设置” -> “导出加密备份”，设置备份密码并保存 `.cerb` 文件。
