@@ -3,6 +3,17 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val releaseKeystoreFile = providers.environmentVariable("CERBERUS_KEYSTORE_FILE")
+val releaseKeystorePassword = providers.environmentVariable("CERBERUS_KEYSTORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("CERBERUS_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("CERBERUS_KEY_PASSWORD")
+val releaseSigningReady = listOf(
+    releaseKeystoreFile,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { provider -> provider.orNull?.isNotBlank() == true }
+
 android {
     namespace = "com.yiran.cerberus"
     compileSdk = 36
@@ -32,8 +43,22 @@ android {
         }
     }
 
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = file(releaseKeystoreFile.get())
+                storePassword = releaseKeystorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             // 必须开启混淆，ProGuard 规则才会生效
             isMinifyEnabled = true
             // 必须开启资源压缩以减小体积
@@ -42,6 +67,21 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name.endsWith("Release")) {
+        doFirst {
+            check(releaseSigningReady) {
+                "Release signing requires CERBERUS_KEYSTORE_FILE, " +
+                    "CERBERUS_KEYSTORE_PASSWORD, CERBERUS_KEY_ALIAS and " +
+                    "CERBERUS_KEY_PASSWORD."
+            }
+            check(file(releaseKeystoreFile.get()).isFile) {
+                "Release keystore does not exist: ${releaseKeystoreFile.get()}"
+            }
         }
     }
 }
