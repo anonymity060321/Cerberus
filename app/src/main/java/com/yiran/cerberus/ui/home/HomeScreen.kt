@@ -915,7 +915,7 @@ fun AddAccountDialog(
                     )
                     Box(modifier = Modifier.fillMaxWidth()) {
                         StyledTextField(
-                            value = if (selectedOtpType.value == OtpType.STEAM) "五字符动态验证码" else "标准 TOTP",
+                            value = if (selectedOtpType.value == OtpType.STEAM) "Steam" else "标准 TOTP",
                             onValueChange = { },
                             readOnly = true,
                             label = "验证码类型",
@@ -944,7 +944,7 @@ fun AddAccountDialog(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("五字符动态验证码") },
+                                text = { Text("Steam") },
                                 onClick = {
                                     selectedOtpType.value = OtpType.STEAM
                                     selectedAlgo.value = OtpAlgorithm.SHA1
