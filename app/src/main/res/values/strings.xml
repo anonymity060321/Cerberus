@@ -2,4 +2,6 @@
     <string name="app_name">Cerberus</string>
     <string name="passkey_provider_name">Cerberus 通行密钥</string>
     <string name="passkey_provider_subtitle">由设备安全硬件保护</string>
+    <string name="autofill_provider_name">Cerberus 自动填充</string>
+    <string name="autofill_auth_title">Cerberus 安全填充</string>
 </resources>

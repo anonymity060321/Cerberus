@@ -83,9 +83,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.3.4"
+            } ?: "1.4.0"
         } catch (_ : Exception) {
-            "1.3.4"
+            "1.4.0"
         }
     }
 
@@ -235,7 +235,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "• 开启后，仅在您手动点击时访问 GitHub API 获取版本号\n• 我们郑重承诺：应用绝不会收集或上传您的任何令牌数据\n• 未经您的明确允许，应用绝不会在后台静默使用联网权限\n• Steam 登录验证码完全在本机生成，不需要联网\n• 通行密钥仅在您主动创建或使用时进行必要的在线安全验证，私钥始终保留在本机安全硬件中",
+                        text = "• 开启后，仅在您手动点击时访问 GitHub API 获取版本号\n• 我们郑重承诺：应用绝不会收集或上传您的任何令牌数据\n• 未经您的明确允许，应用绝不会在后台静默使用联网权限\n• Steam 登录验证码完全在本机生成，不需要联网\n• 账号密码自动填充仅在您主动选择并完成身份验证后执行，不需要联网\n• 通行密钥仅在您主动创建或使用时进行必要的在线安全验证，私钥始终保留在本机安全硬件中",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
@@ -388,6 +388,23 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             }
                         }
                     )
+
+                    AboutItem(
+                        icon = Icons.Default.Key,
+                        label = "账号密码自动填充",
+                        value = "系统设置",
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
+                                        data = "package:${context.packageName}".toUri()
+                                    }
+                                )
+                            }.onFailure {
+                                Toast.makeText(context, "无法打开自动填充设置", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
                 }
             }
 
@@ -439,7 +456,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Cerberus 是一款专注于隐私安全的身份验证工具。我们坚持零网络通信原则，所有数据仅存储于您的物理设备中。\n\n新增功能：支持 Steam 登录两步验证码和系统通行密钥服务。Steam 验证码在本机生成；通行密钥私钥由本机安全硬件保护，使用时仅进行必要的在线安全验证。",
+                        text = "Cerberus 是一款专注于隐私安全的身份验证工具。我们坚持零网络通信原则，所有数据仅存储于您的物理设备中。\n\n新增功能：支持 Steam 登录两步验证码、账号密码自动填充和系统通行密钥服务。Steam 验证码在本机生成；账号密码仅在用户完成身份验证并主动选择后交给系统填充；通行密钥私钥由本机安全硬件保护，使用时仅进行必要的在线安全验证。",
                         style = MaterialTheme.typography.bodyMedium,
                         lineHeight = 22.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -11,8 +11,8 @@ android {
         applicationId = "com.yiran.cerberus"
         minSdk = 35
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.3.4"
+        versionCode = 13
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -106,6 +106,7 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.credentials)
+    implementation(libs.androidx.autofill)
     
     implementation(libs.jna) {
         artifact { type = "aar" }
