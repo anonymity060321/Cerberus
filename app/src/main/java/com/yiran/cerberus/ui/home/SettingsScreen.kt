@@ -83,9 +83,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.3.3"
+            } ?: "1.3.4"
         } catch (_ : Exception) {
-            "1.3.3"
+            "1.3.4"
         }
     }
 
@@ -226,16 +226,16 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     if (showConsentDialog.value) {
         StyledDialog(
             onDismissRequest = { showConsentDialog.value = false },
-            title = "检查更新偏好",
+            title = "联网偏好说明",
             content = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "您可以选择是否启用手动检查更新。通行密钥所需的安全验证不受此开关影响：",
+                        text = "Cerberus 默认禁用所有联网功能。为了您可以及时获取安全修复与新特性，您可以选择开启“检查更新”服务：",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "• 仅在您主动检查更新时访问版本服务\n• 使用通行密钥时，仅获取必要的公开验证信息\n• 任何账号、密码、验证码密钥或通行密钥私钥都不会上传",
+                        text = "• 开启后，仅在您手动点击时访问 GitHub API 获取版本号\n• 我们郑重承诺：应用绝不会收集或上传您的任何令牌数据\n• 未经您的明确允许，应用绝不会在后台静默使用联网权限\n• Steam 登录验证码完全在本机生成，不需要联网\n• 通行密钥仅在您主动创建或使用时进行必要的在线安全验证，私钥始终保留在本机安全硬件中",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
@@ -254,7 +254,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                     SecurityUtil.setUpdateCheckAllowed(context, false)
                     isUpdateCheckAllowed.value = false
                     showConsentDialog.value = false
-                }) { Text("不启用检查更新") }
+                }) { Text("保持离线") }
             }
         )
     }
@@ -310,7 +310,6 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             DropdownMenu(
                                 expanded = showTimeMenu.value,
                                 onDismissRequest = { showTimeMenu.value = false },
-                                modifier = Modifier.width(128.dp),
                                 shape = RoundedCornerShape(16.dp),
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                             ) {
@@ -440,7 +439,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Cerberus 是一款本地优先的身份验证工具。账号数据和通行密钥均由本机安全存储保护；网络只用于您主动检查更新，以及使用通行密钥时进行必要的安全验证。",
+                        text = "Cerberus 是一款专注于隐私安全的身份验证工具。我们坚持零网络通信原则，所有数据仅存储于您的物理设备中。\n\n新增功能：支持 Steam 登录两步验证码和系统通行密钥服务。Steam 验证码在本机生成；通行密钥私钥由本机安全硬件保护，使用时仅进行必要的在线安全验证。",
                         style = MaterialTheme.typography.bodyMedium,
                         lineHeight = 22.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -81,7 +81,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -94,18 +93,18 @@ import com.yiran.cerberus.util.OtpAlgorithm
 import com.yiran.cerberus.util.PasswordGenerator
 import com.yiran.cerberus.util.TotpUtil
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import uniffi.rust_core.Account
 import uniffi.rust_core.OtpType
 
 @Composable
 fun Modifier.dragToReorder(
     lazyListState: androidx.compose.foundation.lazy.LazyListState,
-    density: androidx.compose.ui.unit.Density,
     getDraggedIndex: () -> Int?,
     getDragOffset: () -> Float,
     onDragStart: (Int) -> Unit,
     onDragMove: (deltaY: Float) -> Unit,
-    onSwap: (from: Int, to: Int, adjustment: Float) -> Unit,
+    onSwap: (from: Int, to: Int, positionDelta: Float) -> Unit,
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit
 ): Modifier {
@@ -130,24 +129,27 @@ fun Modifier.dragToReorder(
 
                 val currentDraggedIndex = getDraggedIndex() ?: return@detectDragGesturesAfterLongPress
                 val visibleItems = lazyListState.layoutInfo.visibleItemsInfo
-                val spacingPx = with(density) { 16.dp.toPx() }
-
+                val currentItem = visibleItems.firstOrNull { it.index == currentDraggedIndex }
+                    ?: return@detectDragGesturesAfterLongPress
                 val currentLocalOffset = getDragOffset()
 
-                val targetItem = if (dragAmount.y < 0) {
-                    visibleItems.find { it.index == currentDraggedIndex - 1 }?.takeIf { item ->
-                        currentLocalOffset < -(item.size + spacingPx) / 2f
+                val targetItem = when {
+                    currentLocalOffset < 0f -> {
+                        visibleItems.firstOrNull { it.index == currentDraggedIndex - 1 }
                     }
-                } else {
-                    visibleItems.find { it.index == currentDraggedIndex + 1 }?.takeIf { item ->
-                        currentLocalOffset > (item.size + spacingPx) / 2f
+                    currentLocalOffset > 0f -> {
+                        visibleItems.firstOrNull { it.index == currentDraggedIndex + 1 }
                     }
+                    else -> null
                 }
 
                 if (targetItem != null) {
-                    val adjustment = targetItem.size + spacingPx
-                    onSwap(currentDraggedIndex, targetItem.index, adjustment)
-                    // Caller manages visual offset; after swap caller will adjust `dragOffset`.
+                    // Use the actual measured distance between slots. This remains correct for
+                    // variable-height cards and for the first two slots at the LazyColumn boundary.
+                    val positionDelta = (targetItem.offset - currentItem.offset).toFloat()
+                    if (abs(currentLocalOffset) > abs(positionDelta) / 2f) {
+                        onSwap(currentDraggedIndex, targetItem.index, positionDelta)
+                    }
                 }
             },
             onDragEnd = { onDragEnd() },
@@ -160,7 +162,6 @@ fun Modifier.dragToReorder(
 @Composable
 fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewModel()) {
     val context = LocalContext.current
-    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val accounts = homeViewModel.accounts
     
@@ -169,6 +170,7 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
     // 拖拽排序状态
     val lazyListState = rememberLazyListState()
     var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
+    var draggedItemKey by remember { mutableStateOf<Any?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var isDraggingActive by remember { mutableStateOf(false) }
 
@@ -221,25 +223,27 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                         .fillMaxSize()
                         .dragToReorder(
                             lazyListState = lazyListState,
-                            density = density,
                             getDraggedIndex = { draggedItemIndex },
                             getDragOffset = { dragOffset },
                             onDragStart = { index ->
                                 draggedItemIndex = index
+                                draggedItemKey = accounts.getOrNull(index)?.id
                                 dragOffset = 0f
                                 isDraggingActive = true
                             },
-                            onDragMove = { delta -> dragOffset += delta },
-                            onSwap = { from, to, adjustment ->
-                                homeViewModel.moveAccount(context, from, to)
-                                // 更新当前拖动索引
-                                draggedItemIndex = to
-                                // 调整 Offset 以保持视觉平滑
-                                if (to > from) {
-                                    dragOffset -= adjustment
-                                } else {
-                                    dragOffset += adjustment
+                            onDragMove = { delta ->
+                                val nextOffset = dragOffset + delta
+                                dragOffset = when (draggedItemIndex) {
+                                    0 -> nextOffset.coerceAtLeast(0f)
+                                    accounts.lastIndex -> nextOffset.coerceAtMost(0f)
+                                    else -> nextOffset
                                 }
+                            },
+                            onSwap = { from, to, positionDelta ->
+                                homeViewModel.moveAccount(context, from, to)
+                                draggedItemIndex = to
+                                // Keep the dragged card under the finger after its base slot changes.
+                                dragOffset -= positionDelta
                             },
                             onDragEnd = {
                                 isDraggingActive = false
@@ -248,11 +252,13 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                                         dragOffset = value
                                     }
                                     draggedItemIndex = null
+                                    draggedItemKey = null
                                 }
                             },
                             onDragCancel = {
                                 isDraggingActive = false
                                 draggedItemIndex = null
+                                draggedItemKey = null
                                 dragOffset = 0f
                             }
                         ),
@@ -260,7 +266,7 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
                 ) {
                     itemsIndexed(accounts, key = { _, account -> account.id }) { index, account ->
-                        val isDragging = index == draggedItemIndex
+                        val isDragging = account.id == draggedItemKey
                         val elevation by animateDpAsState(
                             targetValue = if (isDraggingActive && isDragging) 16.dp else 0.dp,
                             label = "drag_elevation"
@@ -279,7 +285,7 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                                     scaleY = scale
                                 }
                                 .animateItem(
-                                    placementSpec = if (isDragging) null else spring(stiffness = Spring.StiffnessMediumLow)
+                                    placementSpec = if (isDragging || (isDraggingActive && index < 2)) null else spring(stiffness = Spring.StiffnessMediumLow)
                                 )
                         ) {
                             AccountItemCard(
