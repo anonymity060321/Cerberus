@@ -1,8 +1,7 @@
 use crate::CryptoError;
 use base64::{engine::general_purpose, Engine as _};
 use digest::Digest;
-use p256::ecdsa::{signature::Signer, Signature, SigningKey, VerifyingKey};
-use p256::elliptic_curve::rand_core::OsRng;
+use p256::ecdsa::{Signature, VerifyingKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::{thread_rng, RngCore};
 use serde::Deserialize;
@@ -23,8 +22,14 @@ pub struct PasskeyCreationResult {
     pub user_id: String,
     pub username: String,
     pub display_name: String,
-    pub private_key: String,
     pub response_json: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct PasskeyAssertionPreparation {
+    pub client_data_json: String,
+    pub authenticator_data: String,
+    pub data_to_sign: String,
 }
 
 #[derive(Deserialize)]
@@ -68,15 +73,17 @@ struct PasskeyRequestOptions {
     allow_credentials: Vec<CredentialDescriptor>,
 }
 
-/// Creates a device-local ES256 passkey and its WebAuthn registration response.
+/// Creates a WebAuthn registration response around a P-256 public key.
 ///
-/// The returned private key must be stored only inside encrypted application
-/// storage. It is intentionally kept out of Cerberus account backups.
+/// The corresponding private key is generated and retained by Android
+/// Keystore; it never crosses the UniFFI boundary.
 #[uniffi::export]
 pub fn create_passkey(
     request_json: String,
     origin: String,
     package_name: String,
+    public_key_x: String,
+    public_key_y: String,
 ) -> Result<PasskeyCreationResult, CryptoError> {
     let options: PasskeyCreationOptions =
         serde_json::from_str(&request_json).map_err(|_| CryptoError::InvalidData)?;
@@ -95,16 +102,22 @@ pub fn create_passkey(
 
     let user_id = decode_base64_url(&options.user.id)?;
     let challenge = decode_base64_url(&options.challenge)?;
-    if user_id.is_empty() || challenge.is_empty() {
+    let x = decode_base64_url(&public_key_x)?;
+    let y = decode_base64_url(&public_key_y)?;
+    if user_id.is_empty() || challenge.is_empty() || x.len() != 32 || y.len() != 32 {
         return Err(CryptoError::InvalidData);
     }
 
+    let mut sec1_public_key = Vec::with_capacity(65);
+    sec1_public_key.push(0x04);
+    sec1_public_key.extend_from_slice(&x);
+    sec1_public_key.extend_from_slice(&y);
+    let verifying_key =
+        VerifyingKey::from_sec1_bytes(&sec1_public_key).map_err(|_| CryptoError::InvalidKey)?;
+    let cose_public_key = encode_cose_public_key(&verifying_key)?;
+
     let mut credential_id = [0u8; 32];
     thread_rng().fill_bytes(&mut credential_id);
-
-    let signing_key = SigningKey::random(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-    let cose_public_key = encode_cose_public_key(verifying_key)?;
 
     let client_data_json = build_client_data(
         "webauthn.create",
@@ -139,22 +152,21 @@ pub fn create_passkey(
         user_id: encode_base64_url(&user_id),
         username: options.user.name,
         display_name: options.user.display_name,
-        private_key: general_purpose::STANDARD.encode(signing_key.to_bytes()),
         response_json,
     })
 }
 
-/// Signs a WebAuthn authentication challenge with a previously stored passkey.
+/// Builds the exact byte sequence that Android Keystore must sign. No private
+/// key material crosses the UniFFI boundary.
 #[uniffi::export]
-pub fn get_passkey_response(
+pub fn prepare_passkey_assertion(
     request_json: String,
     origin: String,
     package_name: String,
     expected_rp_id: String,
     credential_id: String,
     user_id: String,
-    private_key: String,
-) -> Result<String, CryptoError> {
+) -> Result<PasskeyAssertionPreparation, CryptoError> {
     let options: PasskeyRequestOptions =
         serde_json::from_str(&request_json).map_err(|_| CryptoError::InvalidData)?;
 
@@ -179,11 +191,9 @@ pub fn get_passkey_response(
 
     let credential_id_bytes = decode_base64_url(&credential_id)?;
     let user_id_bytes = decode_base64_url(&user_id)?;
-    let private_key_bytes = general_purpose::STANDARD
-        .decode(private_key)
-        .map_err(|_| CryptoError::InvalidData)?;
-    let signing_key =
-        SigningKey::from_slice(&private_key_bytes).map_err(|_| CryptoError::InvalidKey)?;
+    if credential_id_bytes.is_empty() || user_id_bytes.is_empty() {
+        return Err(CryptoError::InvalidData);
+    }
 
     let client_data_json = build_client_data(
         "webauthn.get",
@@ -192,12 +202,44 @@ pub fn get_passkey_response(
         &package_name,
     )?;
     let authenticator_data = build_assertion_authenticator_data(&expected_rp_id);
-
     let client_data_hash = Sha256::digest(client_data_json.as_bytes());
     let mut signed_data = Vec::with_capacity(authenticator_data.len() + client_data_hash.len());
     signed_data.extend_from_slice(&authenticator_data);
     signed_data.extend_from_slice(&client_data_hash);
-    let signature: Signature = signing_key.sign(&signed_data);
+
+    Ok(PasskeyAssertionPreparation {
+        client_data_json: encode_base64_url(client_data_json.as_bytes()),
+        authenticator_data: encode_base64_url(&authenticator_data),
+        data_to_sign: general_purpose::STANDARD.encode(signed_data),
+    })
+}
+
+/// Validates the hardware-produced DER signature and assembles the WebAuthn
+/// response returned to Credential Manager.
+#[uniffi::export]
+pub fn finish_passkey_response(
+    credential_id: String,
+    user_id: String,
+    client_data_json: String,
+    authenticator_data: String,
+    signature_der: String,
+) -> Result<String, CryptoError> {
+    let credential_id_bytes = decode_base64_url(&credential_id)?;
+    let user_id_bytes = decode_base64_url(&user_id)?;
+    let client_data_bytes = decode_base64_url(&client_data_json)?;
+    let authenticator_data_bytes = decode_base64_url(&authenticator_data)?;
+    let signature_bytes = general_purpose::STANDARD
+        .decode(signature_der)
+        .map_err(|_| CryptoError::InvalidData)?;
+    Signature::from_der(&signature_bytes).map_err(|_| CryptoError::InvalidData)?;
+
+    if credential_id_bytes.is_empty()
+        || user_id_bytes.is_empty()
+        || client_data_bytes.is_empty()
+        || authenticator_data_bytes.len() != 37
+    {
+        return Err(CryptoError::InvalidData);
+    }
 
     Ok(json!({
         "id": encode_base64_url(&credential_id_bytes),
@@ -205,9 +247,9 @@ pub fn get_passkey_response(
         "type": "public-key",
         "authenticatorAttachment": "platform",
         "response": {
-            "clientDataJSON": encode_base64_url(client_data_json.as_bytes()),
-            "authenticatorData": encode_base64_url(&authenticator_data),
-            "signature": encode_base64_url(signature.to_der().as_bytes()),
+            "clientDataJSON": encode_base64_url(&client_data_bytes),
+            "authenticatorData": encode_base64_url(&authenticator_data_bytes),
+            "signature": encode_base64_url(&signature_bytes),
             "userHandle": encode_base64_url(&user_id_bytes)
         }
     })
@@ -307,7 +349,11 @@ fn decode_base64_url(value: &str) -> Result<Vec<u8>, CryptoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use p256::ecdsa::signature::Verifier;
+    use p256::ecdsa::{
+        signature::{Signer, Verifier},
+        SigningKey,
+    };
+    use p256::elliptic_curve::rand_core::OsRng;
 
     fn creation_request() -> String {
         json!({
@@ -324,15 +370,22 @@ mod tests {
     }
 
     #[test]
-    fn creates_none_attestation_and_signs_assertion() {
+    fn builds_responses_around_external_hardware_signature() {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let public_key_x = encode_base64_url(point.x().expect("x coordinate"));
+        let public_key_y = encode_base64_url(point.y().expect("y coordinate"));
         let origin = "android:apk-key-hash:test-origin".to_owned();
         let package_name = "org.telegram.messenger".to_owned();
+
         let created = create_passkey(
             creation_request(),
             origin.clone(),
             package_name.clone(),
+            public_key_x,
+            public_key_y,
         )
-            .expect("passkey creation succeeds");
+        .expect("passkey creation succeeds");
         assert_eq!(created.rp_id, "telegram.org");
 
         let creation_json: serde_json::Value =
@@ -353,16 +406,28 @@ mod tests {
             "allowCredentials": [{"type": "public-key", "id": created.credential_id.clone()}]
         })
         .to_string();
-        let response = get_passkey_response(
+        let preparation = prepare_passkey_assertion(
             get_request,
             origin,
             package_name,
             created.rp_id.clone(),
             created.credential_id.clone(),
             created.user_id.clone(),
-            created.private_key.clone(),
         )
-        .expect("assertion succeeds");
+        .expect("assertion preparation succeeds");
+        let signed_data = general_purpose::STANDARD
+            .decode(&preparation.data_to_sign)
+            .expect("valid data-to-sign encoding");
+        let signature: Signature = signing_key.sign(&signed_data);
+        let response = finish_passkey_response(
+            created.credential_id.clone(),
+            created.user_id.clone(),
+            preparation.client_data_json,
+            preparation.authenticator_data,
+            general_purpose::STANDARD.encode(signature.to_der().as_bytes()),
+        )
+        .expect("assertion response succeeds");
+
         let response_json: serde_json::Value =
             serde_json::from_str(&response).expect("valid assertion JSON");
         let auth_data = decode_base64_url(
@@ -384,16 +449,12 @@ mod tests {
         )
         .expect("valid signature");
 
-        let mut signed_data = auth_data;
-        signed_data.extend_from_slice(&Sha256::digest(&client_data));
-        let private_key = general_purpose::STANDARD
-            .decode(created.private_key)
-            .expect("valid private key");
-        let signing_key = SigningKey::from_slice(&private_key).expect("valid signing key");
-        let signature = Signature::from_der(&signature_bytes).expect("DER signature");
+        let mut verified_data = auth_data;
+        verified_data.extend_from_slice(&Sha256::digest(&client_data));
+        let parsed_signature = Signature::from_der(&signature_bytes).expect("DER signature");
         signing_key
             .verifying_key()
-            .verify(&signed_data, &signature)
+            .verify(&verified_data, &parsed_signature)
             .expect("signature verifies");
     }
 }

@@ -15,7 +15,13 @@ use data_encoding::BASE32_NOPAD;
 use serde::{Serialize, Deserialize};
 
 mod passkey;
-pub use passkey::{create_passkey, get_passkey_response, PasskeyCreationResult};
+pub use passkey::{
+    create_passkey,
+    finish_passkey_response,
+    prepare_passkey_assertion,
+    PasskeyAssertionPreparation,
+    PasskeyCreationResult,
+};
 
 // 初始化 UniFFI
 uniffi::setup_scaffolding!();

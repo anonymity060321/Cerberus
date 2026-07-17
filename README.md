@@ -12,7 +12,7 @@
   - **身份验证器 (TOTP)**：支持 SHA1/SHA256/SHA512 算法，生成实时 2FA 校验码。
   - **Steam Guard**：从已有的 `shared_secret` 离线生成 Steam 登录五字符验证码。
   - **密码管理器**：离线存储账号密码，内置基于硬件熵池的**强密码生成器**。
-- 🔑 **Android Passkey Provider**：在 Android 15 及以上作为系统 Passkey 凭据提供程序，为 Telegram 等支持 Credential Manager 的应用保存和提供设备本地 Passkey。
+- 🔑 **Android Passkey Provider**：在 Android 15 及以上作为系统 Passkey 凭据提供程序。Passkey 私钥在 Android Keystore 内生成，优先使用 StrongBox，且不允许导出到应用内存或备份文件。
 - 🌐 **本地优先**：凭据不会上传；网络仅用于用户主动检查更新，以及 Passkey 流程中读取 RP 域名公开的 Digital Asset Links 以验证调用应用。
 - 🔐 **硬件级加密**：利用 Android Keystore 系统和硬件安全模块对数据进行透明加密。
 - 📂 **加密备份 (.cerb)**：
@@ -41,6 +41,8 @@
 
 > Telegram 的 RP ID 是 `telegram.org`，因此必须使用与该域名通过 Digital Asset Links 关联的官方 Telegram 客户端；第三方 Telegram 客户端会被服务端拒绝。
 
+> 从 1.3.0 开始，Passkey 私钥改为硬件绑定且不可导出。旧版软件 Passkey 无法安全迁移：升级前请确保仍有另一种 Telegram 登录方式；升级后应在 Telegram 中删除旧 Passkey，再通过 Cerberus 重新创建。旧版私钥不会参与登录，并会在首次成功保存新硬件 Passkey 时从 Cerberus 存储中移除。
+
 > 小米 HyperOS 3 未实现标准 Credential Provider 启用入口。Cerberus 会通过仅用于兼容的 Autofill Service 出现在系统服务列表中；选择 Cerberus 可能替换当前默认密码自动填充服务，而兼容层本身不会读取、保存或填充普通密码。
 
 ### 备份与恢复
@@ -66,7 +68,7 @@
 ## ⚠️ 免责声明
 
 1. **主密码唯一性**：Cerberus 不设云端找回机制。**遗忘主密码 = 永久失去对所有令牌和密码的访问权限**。
-2. **本地存储**：账号数据不会自动同步，备份需由用户手动完成。设备本地 Passkey 不包含在 `.cerb` 备份中。
+2. **本地存储**：账号数据不会自动同步，备份需由用户手动完成。硬件绑定的 Passkey 私钥不可导出，也不包含在 `.cerb` 备份中；设备丢失或清除应用数据后必须重新创建。
 3. **风险自担**：本应用作为开源工具提供，开发者不对因设备故障、误操作或遗忘密码导致的数据丢失承担任何责任。
 
 ---

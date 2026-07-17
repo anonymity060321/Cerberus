@@ -81,9 +81,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.2.1"
+            } ?: "1.3.0"
         } catch (_ : Exception) {
-            "1.2.1"
+            "1.3.0"
         }
     }
 
@@ -352,7 +352,11 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                     AboutItem(
                         icon = Icons.Default.Key,
                         label = "Passkey 凭据提供程序",
-                        value = "${PasskeyStore.count(context)} 个 / 系统设置",
+                        value = if (PasskeyStore.legacyCount(context) > 0) {
+                            "${PasskeyStore.count(context)} 个硬件密钥 / ${PasskeyStore.legacyCount(context)} 个旧版密钥需重建"
+                        } else {
+                            "${PasskeyStore.count(context)} 个硬件保护密钥 / 系统设置"
+                        },
                         onClick = {
                             val packageUri = "package:${context.packageName}".toUri()
                             runCatching {

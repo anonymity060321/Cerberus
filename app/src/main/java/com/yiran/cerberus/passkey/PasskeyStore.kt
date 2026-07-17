@@ -2,7 +2,6 @@ package com.yiran.cerberus.passkey
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONArray
@@ -14,16 +13,18 @@ data class StoredPasskey(
     val userId: String,
     val username: String,
     val displayName: String,
-    val privateKey: String,
+    val keyAlias: String,
     val createdAt: Long,
     val lastUsedAt: Long
 )
 
 /**
- * Device-local passkey storage. The private scalar returned by the Rust FIDO
- * implementation is encrypted by an Android Keystore-protected master
- * key before it reaches disk. Passkeys are deliberately excluded from .cerb
- * account backups.
+ * Stores only Passkey metadata. Private keys remain non-exportable inside
+ * Android Keystore and are deliberately excluded from .cerb backups.
+ *
+ * Records created by versions before 1.3.0 contain an exportable privateKey.
+ * They are reported as legacy records but are never loaded for authentication.
+ * Saving the first hardware-backed Passkey rewrites this store without them.
  */
 object PasskeyStore {
     private const val PREF_NAME = "passkey_secure_prefs"
@@ -49,11 +50,22 @@ object PasskeyStore {
 
     @Synchronized
     fun save(context: Context, passkey: StoredPasskey) {
+        require(PasskeyKeyStore.contains(passkey.keyAlias)) {
+            "Passkey hardware key is missing"
+        }
         val current = loadAll(context)
             .filterNot { it.credentialId == passkey.credentialId }
             .toMutableList()
         current.add(passkey)
         writeAll(context, current)
+    }
+
+    @Synchronized
+    fun remove(context: Context, credentialId: String) {
+        val current = loadAll(context)
+        val removed = current.firstOrNull { it.credentialId == credentialId }
+        writeAll(context, current.filterNot { it.credentialId == credentialId })
+        removed?.let { PasskeyKeyStore.delete(it.keyAlias) }
     }
 
     @Synchronized
@@ -79,30 +91,47 @@ object PasskeyStore {
     @Synchronized
     fun count(context: Context): Int = loadAll(context).size
 
-    private fun loadAll(context: Context): List<StoredPasskey> {
-        val encoded = preferences(context).getString(KEY_PASSKEYS, null) ?: return emptyList()
-        return try {
-            val array = JSONArray(encoded)
-            buildList {
-                for (index in 0 until array.length()) {
-                    val item = array.getJSONObject(index)
-                    add(
-                        StoredPasskey(
-                            credentialId = item.getString("credentialId"),
-                            rpId = item.getString("rpId"),
-                            userId = item.getString("userId"),
-                            username = item.getString("username"),
-                            displayName = item.getString("displayName"),
-                            privateKey = item.getString("privateKey"),
-                            createdAt = item.getLong("createdAt"),
-                            lastUsedAt = item.getLong("lastUsedAt")
-                        )
-                    )
-                }
+    @Synchronized
+    fun legacyCount(context: Context): Int {
+        val array = readArray(context) ?: return 0
+        var count = 0
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            if (item.has("privateKey") && item.optString("keyAlias").isBlank()) {
+                count += 1
             }
-        } catch (_: Exception) {
-            emptyList()
         }
+        return count
+    }
+
+    private fun loadAll(context: Context): List<StoredPasskey> {
+        val array = readArray(context) ?: return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val keyAlias = item.optString("keyAlias")
+                if (keyAlias.isBlank() || !PasskeyKeyStore.contains(keyAlias)) {
+                    continue
+                }
+                runCatching {
+                    StoredPasskey(
+                        credentialId = item.getString("credentialId"),
+                        rpId = item.getString("rpId"),
+                        userId = item.getString("userId"),
+                        username = item.getString("username"),
+                        displayName = item.getString("displayName"),
+                        keyAlias = keyAlias,
+                        createdAt = item.getLong("createdAt"),
+                        lastUsedAt = item.getLong("lastUsedAt")
+                    )
+                }.getOrNull()?.let { add(it) }
+            }
+        }
+    }
+
+    private fun readArray(context: Context): JSONArray? {
+        val encoded = preferences(context).getString(KEY_PASSKEYS, null) ?: return null
+        return runCatching { JSONArray(encoded) }.getOrNull()
     }
 
     private fun writeAll(context: Context, passkeys: List<StoredPasskey>) {
@@ -115,13 +144,18 @@ object PasskeyStore {
                     .put("userId", passkey.userId)
                     .put("username", passkey.username)
                     .put("displayName", passkey.displayName)
-                    .put("privateKey", passkey.privateKey)
+                    .put("keyAlias", passkey.keyAlias)
                     .put("createdAt", passkey.createdAt)
                     .put("lastUsedAt", passkey.lastUsedAt)
             )
         }
-        preferences(context).edit(commit = true) {
-            putString(KEY_PASSKEYS, array.toString())
+        check(
+            preferences(context)
+                .edit()
+                .putString(KEY_PASSKEYS, array.toString())
+                .commit()
+        ) {
+            "Unable to persist Passkey metadata"
         }
     }
 }

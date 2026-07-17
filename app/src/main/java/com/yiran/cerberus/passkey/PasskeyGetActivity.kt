@@ -3,6 +3,7 @@ package com.yiran.cerberus.passkey
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.util.Base64
 import android.view.WindowManager
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -13,8 +14,11 @@ import androidx.credentials.exceptions.GetCredentialUnknownException
 import androidx.credentials.provider.PendingIntentHandler
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
+import java.security.Signature
 import kotlinx.coroutines.launch
-import uniffi.rust_core.getPasskeyResponse
+import uniffi.rust_core.PasskeyAssertionPreparation
+import uniffi.rust_core.finishPasskeyResponse
+import uniffi.rust_core.preparePasskeyAssertion
 
 class PasskeyGetActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,7 +32,7 @@ class PasskeyGetActivity : FragmentActivity() {
             CerberusCredentialProviderService.EXTRA_CREDENTIAL_ID
         ) ?: return fail("Passkey ID 缺失")
         val passkey = PasskeyStore.findByCredentialId(this, credentialId)
-            ?: return fail("Passkey 已不存在")
+            ?: return fail("Passkey 已不存在或需要重新创建")
         val providerRequest = PendingIntentHandler.retrieveProviderGetCredentialRequest(intent)
             ?: return fail("无法读取 Passkey 登录请求")
         val request = providerRequest.credentialOptions
@@ -40,26 +44,54 @@ class PasskeyGetActivity : FragmentActivity() {
                 fail("调用应用未通过 ${passkey.rpId} 的 Digital Asset Links 验证")
                 return@launch
             }
-            authenticate(passkey.rpId) {
-                signAndReturn(providerRequest, request, passkey)
-            }
+            prepareAndAuthenticate(providerRequest, request, passkey)
         }
     }
 
-    private fun signAndReturn(
+    private fun prepareAndAuthenticate(
         providerRequest: androidx.credentials.provider.ProviderGetCredentialRequest,
         request: GetPublicKeyCredentialOption,
         passkey: StoredPasskey
     ) {
         try {
-            val responseJson = getPasskeyResponse(
+            val preparation = preparePasskeyAssertion(
                 requestJson = request.requestJson,
                 origin = NativeAppIdentity.origin(providerRequest.callingAppInfo),
                 packageName = providerRequest.callingAppInfo.packageName,
                 expectedRpId = passkey.rpId,
                 credentialId = passkey.credentialId,
+                userId = passkey.userId
+            )
+            val signature = PasskeyKeyStore.createSigningSignature(passkey.keyAlias)
+            authenticate(passkey.rpId, signature) { authenticatedSignature ->
+                signAndReturn(
+                    providerRequest,
+                    passkey,
+                    preparation,
+                    authenticatedSignature
+                )
+            }
+        } catch (exception: Exception) {
+            fail("准备 Passkey 签名失败: ${exception.message ?: "未知错误"}")
+        }
+    }
+
+    private fun signAndReturn(
+        providerRequest: androidx.credentials.provider.ProviderGetCredentialRequest,
+        passkey: StoredPasskey,
+        preparation: PasskeyAssertionPreparation,
+        signature: Signature
+    ) {
+        try {
+            val signedData = Base64.decode(preparation.dataToSign, Base64.DEFAULT)
+            signature.update(signedData)
+            val signatureDer = Base64.encodeToString(signature.sign(), Base64.NO_WRAP)
+            val responseJson = finishPasskeyResponse(
+                credentialId = passkey.credentialId,
                 userId = passkey.userId,
-                privateKey = passkey.privateKey
+                clientDataJson = preparation.clientDataJson,
+                authenticatorData = preparation.authenticatorData,
+                signatureDer = signatureDer
             )
             PasskeyStore.touch(this, passkey.credentialId)
 
@@ -76,7 +108,11 @@ class PasskeyGetActivity : FragmentActivity() {
         }
     }
 
-    private fun authenticate(rpId: String, onSuccess: () -> Unit) {
+    private fun authenticate(
+        rpId: String,
+        signature: Signature,
+        onSuccess: (Signature) -> Unit
+    ) {
         val authenticators =
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
                 BiometricManager.Authenticators.DEVICE_CREDENTIAL
@@ -98,17 +134,21 @@ class PasskeyGetActivity : FragmentActivity() {
                 override fun onAuthenticationSucceeded(
                     result: BiometricPrompt.AuthenticationResult
                 ) {
-                    onSuccess()
+                    val authenticatedSignature = result.cryptoObject?.signature
+                    if (authenticatedSignature == null) {
+                        fail("硬件密钥认证失败")
+                        return
+                    }
+                    onSuccess(authenticatedSignature)
                 }
             }
         )
-        prompt.authenticate(
-            BiometricPrompt.PromptInfo.Builder()
-                .setTitle("使用 Passkey 登录")
-                .setSubtitle("验证身份后登录 $rpId")
-                .setAllowedAuthenticators(authenticators)
-                .build()
-        )
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("使用 Passkey 登录")
+            .setSubtitle("验证身份后使用硬件密钥登录 $rpId")
+            .setAllowedAuthenticators(authenticators)
+            .build()
+        prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))
     }
 
     private fun fail(message: String) {

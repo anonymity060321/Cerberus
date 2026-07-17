@@ -47,12 +47,19 @@ class PasskeyCreateActivity : FragmentActivity() {
         request: CreatePublicKeyCredentialRequest,
         callingAppInfo: androidx.credentials.provider.CallingAppInfo
     ) {
+        var keyMaterial: HardwareKeyMaterial? = null
+        var storedCredentialId: String? = null
         try {
+            val generatedKeyMaterial = PasskeyKeyStore.createKeyMaterial()
+            keyMaterial = generatedKeyMaterial
             val created = createPasskey(
                 requestJson = request.requestJson,
                 origin = NativeAppIdentity.origin(callingAppInfo),
-                packageName = callingAppInfo.packageName
+                packageName = callingAppInfo.packageName,
+                publicKeyX = generatedKeyMaterial.publicKeyX,
+                publicKeyY = generatedKeyMaterial.publicKeyY
             )
+            val response = CreatePublicKeyCredentialResponse(created.responseJson)
             val now = System.currentTimeMillis()
             PasskeyStore.save(
                 this,
@@ -62,20 +69,21 @@ class PasskeyCreateActivity : FragmentActivity() {
                     userId = created.userId,
                     username = created.username,
                     displayName = created.displayName,
-                    privateKey = created.privateKey,
+                    keyAlias = generatedKeyMaterial.alias,
                     createdAt = now,
                     lastUsedAt = now
                 )
             )
+            storedCredentialId = created.credentialId
 
             val result = Intent()
-            PendingIntentHandler.setCreateCredentialResponse(
-                result,
-                CreatePublicKeyCredentialResponse(created.responseJson)
-            )
+            PendingIntentHandler.setCreateCredentialResponse(result, response)
             setResult(Activity.RESULT_OK, result)
+            keyMaterial = null
             finish()
         } catch (exception: Exception) {
+            storedCredentialId?.let { PasskeyStore.remove(this, it) }
+            keyMaterial?.let { PasskeyKeyStore.delete(it.alias) }
             fail("创建 Passkey 失败: ${exception.message ?: "未知错误"}")
         }
     }
@@ -109,7 +117,7 @@ class PasskeyCreateActivity : FragmentActivity() {
         prompt.authenticate(
             BiometricPrompt.PromptInfo.Builder()
                 .setTitle("保存 Passkey")
-                .setSubtitle("验证身份后为 $rpId 创建 Passkey")
+                .setSubtitle("验证身份后为 $rpId 创建硬件保护的 Passkey")
                 .setAllowedAuthenticators(authenticators)
                 .build()
         )
