@@ -41,6 +41,8 @@
 
 > Telegram 的 RP ID 是 `telegram.org`，因此必须使用与该域名通过 Digital Asset Links 关联的官方 Telegram 客户端；第三方 Telegram 客户端会被服务端拒绝。
 
+> 小米 HyperOS 3 未实现标准 Credential Provider 启用入口。Cerberus 会通过仅用于兼容的 Autofill Service 出现在系统服务列表中；选择 Cerberus 可能替换当前默认密码自动填充服务，而兼容层本身不会读取、保存或填充普通密码。
+
 ### 备份与恢复
 - **导出**：进入“设置” -> “导出加密备份”，设置备份密码并保存 `.cerb` 文件。
 - **恢复**：在新设备上安装后，通过“导入加密备份”并输入正确的备份密码即可找回所有数据。

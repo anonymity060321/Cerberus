@@ -81,9 +81,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.1.0"
+            } ?: "1.2.1"
         } catch (_ : Exception) {
-            "1.1.0"
+            "1.2.1"
         }
     }
 
@@ -354,12 +354,25 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                         label = "Passkey 凭据提供程序",
                         value = "${PasskeyStore.count(context)} 个 / 系统设置",
                         onClick = {
+                            val packageUri = "package:${context.packageName}".toUri()
                             runCatching {
-                                context.startActivity(
-                                    Intent(Settings.ACTION_CREDENTIAL_PROVIDER).apply {
-                                        data = "package:${context.packageName}".toUri()
-                                    }
-                                )
+                                if (Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)) {
+                                    Toast.makeText(
+                                        context,
+                                        "HyperOS 兼容模式：Cerberus 将成为默认自动填充服务，但仅处理 Passkey",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
+                                            data = packageUri
+                                        }
+                                    )
+                                } else {
+                                    androidx.credentials.CredentialManager
+                                        .create(context)
+                                        .createSettingsPendingIntent()
+                                        .send()
+                                }
                             }.onFailure {
                                 Toast.makeText(context, "无法打开凭据提供程序设置", Toast.LENGTH_SHORT).show()
                             }
