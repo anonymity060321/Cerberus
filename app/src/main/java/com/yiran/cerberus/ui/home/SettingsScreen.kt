@@ -2,6 +2,7 @@ package com.yiran.cerberus.ui.home
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -497,17 +498,21 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             onCheckedChange = { enabled ->
                                 SecurityUtil.setPasswordAutofillEnabled(context, enabled)
                                 isPasswordAutofillEnabled.value = enabled
-                                if (
-                                    enabled &&
-                                    credentialProviderController.currentStatus() !=
-                                        CredentialProviderStatus.ENABLED
-                                ) {
-                                    if (!credentialProviderController.openSettings()) {
+                                if (enabled) {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(
+                                                Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE
+                                            ).apply {
+                                                data = "package:${context.packageName}".toUri()
+                                            }
+                                        )
+                                    }.onFailure {
                                         SecurityUtil.setPasswordAutofillEnabled(context, false)
                                         isPasswordAutofillEnabled.value = false
                                         Toast.makeText(
                                             context,
-                                            "系统未提供可用的凭据服务设置入口",
+                                            "系统未提供可用的账号密码自动填充设置入口",
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     }
