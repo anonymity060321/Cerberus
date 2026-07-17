@@ -812,7 +812,7 @@ fun AddAccountDialog(
                             }
                             secretError.value = ""
                         },
-                        label = if (selectedOtpType.value == OtpType.STEAM) "Steam shared_secret (Base64)" else "TOTP 密钥 (Base32)",
+                        label = if (selectedOtpType.value == OtpType.STEAM) "Steam 验证密钥" else "TOTP 密钥",
                         isError = secretError.value.isNotEmpty(),
                         supportingText = secretError.value
                     )
@@ -871,7 +871,7 @@ fun AddAccountDialog(
                         }
                         if (!isSecretValid) {
                             secretError.value = if (selectedOtpType.value == OtpType.STEAM) {
-                                "shared_secret 必须是有效的 Base64"
+                                "Steam 验证密钥格式不正确"
                             } else {
                                 "密钥格式错误"
                             }

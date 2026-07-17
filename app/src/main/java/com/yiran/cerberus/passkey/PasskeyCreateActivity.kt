@@ -23,21 +23,21 @@ class PasskeyCreateActivity : FragmentActivity() {
 
         val providerRequest =
             PendingIntentHandler.retrieveProviderCreateCredentialRequest(intent)
-                ?: return fail("无法读取 Passkey 创建请求")
+                ?: return fail("无法读取通行密钥创建请求")
         val request = providerRequest.callingRequest as? CreatePublicKeyCredentialRequest
             ?: return fail("不支持的凭据类型")
         val callingAppInfo = providerRequest.callingAppInfo
             ?: return fail("调用应用身份缺失")
         val rpId = runCatching {
             JSONObject(request.requestJson).getJSONObject("rp").getString("id")
-        }.getOrNull() ?: return fail("Passkey 请求缺少 RP ID")
+        }.getOrNull() ?: return fail("通行密钥请求信息不完整")
 
         lifecycleScope.launch {
             if (!NativeAppIdentity.verifyRpAssociation(rpId, callingAppInfo)) {
-                fail("调用应用未通过 $rpId 的 Digital Asset Links 验证")
+                fail("无法验证调用应用与目标服务的关联关系")
                 return@launch
             }
-            authenticate(rpId) {
+            authenticate {
                 createAndReturn(request, callingAppInfo)
             }
         }
@@ -84,11 +84,11 @@ class PasskeyCreateActivity : FragmentActivity() {
         } catch (exception: Exception) {
             storedCredentialId?.let { PasskeyStore.remove(this, it) }
             keyMaterial?.let { PasskeyKeyStore.delete(it.alias) }
-            fail("创建 Passkey 失败: ${exception.message ?: "未知错误"}")
+            fail("创建通行密钥失败: ${exception.message ?: "未知错误"}")
         }
     }
 
-    private fun authenticate(rpId: String, onSuccess: () -> Unit) {
+    private fun authenticate(onSuccess: () -> Unit) {
         val authenticators =
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
                 BiometricManager.Authenticators.DEVICE_CREDENTIAL
@@ -116,8 +116,8 @@ class PasskeyCreateActivity : FragmentActivity() {
         )
         prompt.authenticate(
             BiometricPrompt.PromptInfo.Builder()
-                .setTitle("保存 Passkey")
-                .setSubtitle("验证身份后为 $rpId 创建硬件保护的 Passkey")
+                .setTitle("保存通行密钥")
+                .setSubtitle("验证身份后创建硬件保护的通行密钥")
                 .setAllowedAuthenticators(authenticators)
                 .build()
         )

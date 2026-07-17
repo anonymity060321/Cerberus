@@ -58,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -82,9 +83,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.3.2"
+            } ?: "1.3.3"
         } catch (_ : Exception) {
-            "1.3.2"
+            "1.3.3"
         }
     }
 
@@ -229,12 +230,12 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             content = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "您可以选择是否启用手动检查更新。Passkey 功能的 Digital Asset Links 身份验证不受此开关影响：",
+                        text = "您可以选择是否启用手动检查更新。通行密钥所需的安全验证不受此开关影响：",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "• 检查更新仅在您手动点击时访问 GitHub API\n• 使用 Passkey 时，仅访问 RP 域名公开的 assetlinks.json\n• 任何令牌、密码、shared_secret 或 Passkey 私钥都不会上传",
+                        text = "• 仅在您主动检查更新时访问版本服务\n• 使用通行密钥时，仅获取必要的公开验证信息\n• 任何账号、密码、验证码密钥或通行密钥私钥都不会上传",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
@@ -305,21 +306,31 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             onClick = { showTimeMenu.value = true }
                         )
                         
-                        DropdownMenu(
-                            expanded = showTimeMenu.value,
-                            onDismissRequest = { showTimeMenu.value = false },
-                            shape = RoundedCornerShape(16.dp),
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                        ) {
-                            listOf(0L, 15000L, 30000L, 60000L).forEach { time ->
-                                DropdownMenuItem(
-                                    text = { Text(if (time == 0L) "立即" else "${time / 1000} 秒", fontWeight = FontWeight.Medium) },
-                                    onClick = {
-                                        SecurityUtil.setAutoLockTime(context, time)
-                                        autoLockTime.longValue = time
-                                        showTimeMenu.value = false
-                                    }
-                                )
+                        Box(modifier = Modifier.align(Alignment.TopEnd)) {
+                            DropdownMenu(
+                                expanded = showTimeMenu.value,
+                                onDismissRequest = { showTimeMenu.value = false },
+                                modifier = Modifier.width(128.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            ) {
+                                listOf(0L, 15000L, 30000L, 60000L).forEach { time ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = if (time == 0L) "立即" else "${time / 1000} 秒",
+                                                modifier = Modifier.fillMaxWidth(),
+                                                textAlign = TextAlign.End,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        },
+                                        onClick = {
+                                            SecurityUtil.setAutoLockTime(context, time)
+                                            autoLockTime.longValue = time
+                                            showTimeMenu.value = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -352,11 +363,11 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
 
                     AboutItem(
                         icon = Icons.Default.Key,
-                        label = "Passkey 凭据提供程序",
+                        label = "通行密钥服务",
                         value = if (PasskeyStore.legacyCount(context) > 0) {
-                            "${PasskeyStore.legacyCount(context)} 个旧版 · 需重建"
+                            "${PasskeyStore.legacyCount(context)} 个旧版"
                         } else {
-                            "${PasskeyStore.count(context)} 个 · 系统设置"
+                            "${PasskeyStore.count(context)} 个 · 设置"
                         },
                         onClick = {
                             val packageUri = "package:${context.packageName}".toUri()
@@ -429,7 +440,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Cerberus 是一款本地优先的身份验证工具。密码、令牌和 Passkey 私钥仅存储在您的设备中；网络只用于手动检查更新和 Passkey 调用方身份校验。",
+                        text = "Cerberus 是一款本地优先的身份验证工具。账号数据和通行密钥均由本机安全存储保护；网络只用于您主动检查更新，以及使用通行密钥时进行必要的安全验证。",
                         style = MaterialTheme.typography.bodyMedium,
                         lineHeight = 22.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -27,21 +27,21 @@ class PasskeyGetActivity : FragmentActivity() {
 
         val extras = intent.getBundleExtra(
             CerberusCredentialProviderService.EXTRA_PASSKEY_DATA
-        ) ?: return fail("Passkey 选择信息缺失")
+        ) ?: return fail("通行密钥选择信息缺失")
         val credentialId = extras.getString(
             CerberusCredentialProviderService.EXTRA_CREDENTIAL_ID
-        ) ?: return fail("Passkey ID 缺失")
+        ) ?: return fail("通行密钥标识缺失")
         val passkey = PasskeyStore.findByCredentialId(this, credentialId)
-            ?: return fail("Passkey 已不存在或需要重新创建")
+            ?: return fail("通行密钥已不存在或需要重新创建")
         val providerRequest = PendingIntentHandler.retrieveProviderGetCredentialRequest(intent)
-            ?: return fail("无法读取 Passkey 登录请求")
+            ?: return fail("无法读取通行密钥登录请求")
         val request = providerRequest.credentialOptions
             .filterIsInstance<GetPublicKeyCredentialOption>()
             .firstOrNull() ?: return fail("不支持的凭据类型")
 
         lifecycleScope.launch {
             if (!NativeAppIdentity.verifyRpAssociation(passkey.rpId, providerRequest.callingAppInfo)) {
-                fail("调用应用未通过 ${passkey.rpId} 的 Digital Asset Links 验证")
+                fail("无法验证调用应用与目标服务的关联关系")
                 return@launch
             }
             prepareAndAuthenticate(providerRequest, request, passkey)
@@ -63,7 +63,7 @@ class PasskeyGetActivity : FragmentActivity() {
                 userId = passkey.userId
             )
             val signature = PasskeyKeyStore.createSigningSignature(passkey.keyAlias)
-            authenticate(passkey.rpId, signature) { authenticatedSignature ->
+            authenticate(signature) { authenticatedSignature ->
                 signAndReturn(
                     providerRequest,
                     passkey,
@@ -72,7 +72,7 @@ class PasskeyGetActivity : FragmentActivity() {
                 )
             }
         } catch (exception: Exception) {
-            fail("准备 Passkey 签名失败: ${exception.message ?: "未知错误"}")
+            fail("准备通行密钥签名失败: ${exception.message ?: "未知错误"}")
         }
     }
 
@@ -104,12 +104,11 @@ class PasskeyGetActivity : FragmentActivity() {
             setResult(Activity.RESULT_OK, result)
             finish()
         } catch (exception: Exception) {
-            fail("Passkey 签名失败: ${exception.message ?: "未知错误"}")
+            fail("通行密钥签名失败: ${exception.message ?: "未知错误"}")
         }
     }
 
     private fun authenticate(
-        rpId: String,
         signature: Signature,
         onSuccess: (Signature) -> Unit
     ) {
@@ -144,8 +143,8 @@ class PasskeyGetActivity : FragmentActivity() {
             }
         )
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("使用 Passkey 登录")
-            .setSubtitle("验证身份后使用硬件密钥登录 $rpId")
+            .setTitle("使用通行密钥登录")
+            .setSubtitle("验证身份后使用硬件密钥登录")
             .setAllowedAuthenticators(authenticators)
             .build()
         prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))

@@ -41,7 +41,7 @@ class CerberusCredentialProviderService : CredentialProviderService() {
             getString(com.yiran.cerberus.R.string.app_name),
             pendingIntent(PasskeyCreateActivity::class.java)
         )
-            .setDescription("使用 Cerberus 的设备加密存储保存 Passkey")
+            .setDescription("使用 Cerberus 的安全硬件保存通行密钥")
             .setPublicKeyCredentialCount(PasskeyStore.count(applicationContext))
             .setTotalCredentialCount(PasskeyStore.count(applicationContext))
             .build()

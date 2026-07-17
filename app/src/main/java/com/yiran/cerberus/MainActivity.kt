@@ -288,7 +288,7 @@ fun UpdateConsentScreen(onDecision: (Boolean) -> Unit) {
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(
-            text = "联网与安全校验说明",
+            text = "联网与安全说明",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.ExtraBold
         )
@@ -301,15 +301,15 @@ fun UpdateConsentScreen(onDecision: (Boolean) -> Unit) {
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "Cerberus 不上传任何凭据。您可以选择是否允许手动检查更新；使用 Passkey 时，系统会按需访问 RP 域名的 Digital Asset Links 文件来验证调用应用身份。",
+                    text = "Cerberus 不上传任何凭据。您可以选择是否允许手动检查更新；使用通行密钥时，应用只会进行必要的在线安全验证。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 
-                TermItem("透明联网", "检查更新只会在您手动点击后访问 GitHub；Passkey 身份校验只会访问对应 RP 的公开 .well-known/assetlinks.json。")
+                TermItem("透明联网", "只有在您主动检查更新或使用通行密钥时，应用才会发起必要的网络请求。")
                 TermItem("隐私红线", "我们郑重承诺：应用绝不会静默上传您的任何令牌数据、账户指纹或个人统计信息。")
-                TermItem("本地私钥", "Passkey 私钥仅保存在本机加密存储中，不包含在 .cerb 备份内，也不会发送给 Telegram。")
+                TermItem("本地私钥", "通行密钥私钥仅由本机安全硬件保护，不会写入加密备份，也不会发送给任何第三方。")
             }
         }
 
