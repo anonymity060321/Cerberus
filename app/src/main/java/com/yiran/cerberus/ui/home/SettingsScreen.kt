@@ -517,7 +517,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Cerberus 是一款专注于隐私安全的身份验证工具。我们坚持零网络通信原则，所有数据仅存储于您的物理设备中。\n\n新增功能：支持标准动态验证码、五字符动态验证码协议、账号密码自动填充和系统通行密钥服务。动态验证码在本机生成；账号密码自动填充默认关闭，仅在用户主动开启、完成身份验证并选择账号后执行；通行密钥私钥由本机安全硬件保护，使用时仅进行必要的在线安全验证。",
+                        text = "Cerberus 是一款注重隐私与本地安全的凭据管理和身份验证工具，支持账号密码管理、标准动态验证码、五字符动态验证码协议、经身份验证的账号密码自动填充，以及系统通行密钥服务。\n\n账号密码和动态验证码数据均加密保存在本机；自动填充默认关闭，仅在用户主动开启、完成身份验证并选择账号后执行；通行密钥私钥由设备安全硬件保护，不会写入加密备份。除用户主动检查更新或使用通行密钥所需的在线安全验证外，应用不会主动联网。",
                         style = MaterialTheme.typography.bodyMedium,
                         lineHeight = 22.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
