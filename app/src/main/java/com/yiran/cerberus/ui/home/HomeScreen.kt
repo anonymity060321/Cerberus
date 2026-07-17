@@ -7,8 +7,6 @@ import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -23,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -74,12 +73,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
@@ -87,6 +84,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -96,17 +94,21 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yiran.cerberus.util.OtpAlgorithm
 import com.yiran.cerberus.util.PasswordGenerator
 import com.yiran.cerberus.util.TotpUtil
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import uniffi.rust_core.Account
 import uniffi.rust_core.OtpType
+
+private const val DRAG_PLACEHOLDER_KEY = "cerberus-drag-placeholder"
 
 @Composable
 fun Modifier.dragToReorder(
     lazyListState: androidx.compose.foundation.lazy.LazyListState,
-    getDraggedIndex: () -> Int?,
+    getDragStartOffset: () -> Float,
+    getDraggedItemSize: () -> Float,
     getDragOffset: () -> Float,
-    onDragStart: (index: Int, itemSize: Int) -> Unit,
+    onDragStart: (index: Int, itemOffset: Int, itemSize: Int) -> Unit,
     onDragMove: (deltaY: Float) -> Unit,
     onTargetChange: (targetIndex: Int) -> Unit,
     onDragEnd: () -> Unit,
@@ -115,54 +117,31 @@ fun Modifier.dragToReorder(
     val haptic = LocalHapticFeedback.current
     return this.pointerInput(Unit) {
         detectDragGesturesAfterLongPress(
-            onDragStart = { offset ->
+            onDragStart = { pointerOffset ->
                 lazyListState.layoutInfo.visibleItemsInfo
                     .firstOrNull { item ->
-                        offset.y.toInt() in item.offset..(item.offset + item.size)
+                        pointerOffset.y.toInt() in item.offset..(item.offset + item.size)
                     }
                     ?.also { item ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onDragStart(item.index, item.size)
+                        onDragStart(item.index, item.offset, item.size)
                     }
             },
             onDrag = { change, dragAmount ->
                 change.consume()
                 onDragMove(dragAmount.y)
 
-                val originIndex = getDraggedIndex()
-                    ?: return@detectDragGesturesAfterLongPress
-                val visibleItems = lazyListState.layoutInfo.visibleItemsInfo
-                val originItem = visibleItems.firstOrNull { it.index == originIndex }
-                    ?: return@detectDragGesturesAfterLongPress
-                val draggedCenter = originItem.offset +
-                    getDragOffset() +
-                    originItem.size / 2f
-                val originCenter = originItem.offset + originItem.size / 2f
-
-                val targetIndex = when {
-                    draggedCenter < originCenter -> {
-                        visibleItems
-                            .asSequence()
-                            .filter { item ->
-                                item.index < originIndex &&
-                                    draggedCenter < item.offset + item.size / 2f
-                            }
-                            .minOfOrNull { it.index }
-                            ?: originIndex
+                val draggedCenter =
+                    getDragStartOffset() +
+                        getDragOffset() +
+                        getDraggedItemSize() / 2f
+                val target = lazyListState.layoutInfo.visibleItemsInfo
+                    .minByOrNull { item ->
+                        abs((item.offset + item.size / 2f) - draggedCenter)
                     }
-                    draggedCenter > originCenter -> {
-                        visibleItems
-                            .asSequence()
-                            .filter { item ->
-                                item.index > originIndex &&
-                                    draggedCenter > item.offset + item.size / 2f
-                            }
-                            .maxOfOrNull { it.index }
-                            ?: originIndex
-                    }
-                    else -> originIndex
-                }
-                onTargetChange(targetIndex)
+                    ?.index
+                    ?: return@detectDragGesturesAfterLongPress
+                onTargetChange(target)
             },
             onDragEnd = onDragEnd,
             onDragCancel = onDragCancel
@@ -177,18 +156,56 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val accounts = homeViewModel.accounts
-    
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
-    // 拖拽排序状态
+    // Dragging uses a stable placeholder plus a separate overlay. The backing list is
+    // changed only once, after the pointer is released.
     val lazyListState = rememberLazyListState()
     var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
     var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
     var draggedItemKey by remember { mutableStateOf<Any?>(null) }
+    var draggedItemStartOffsetPx by remember { mutableFloatStateOf(0f) }
     var draggedItemSizePx by remember { mutableFloatStateOf(0f) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var isDraggingActive by remember { mutableStateOf(false) }
-    var suppressPlacementAnimation by remember { mutableStateOf(false) }
+
+    val draggedAccount = draggedItemKey?.let { key ->
+        accounts.firstOrNull { account -> account.id == key }
+    }
+    val displayedAccounts: List<Account?> =
+        if (
+            isDraggingActive &&
+            draggedAccount != null &&
+            dragTargetIndex != null
+        ) {
+            val target = dragTargetIndex!!.coerceIn(0, accounts.lastIndex)
+            val remaining = accounts.filterNot { account ->
+                account.id == draggedItemKey
+            }
+            buildList<Account?>(accounts.size) {
+                var remainingIndex = 0
+                repeat(accounts.size) { slot ->
+                    if (slot == target) {
+                        add(null)
+                    } else {
+                        add(remaining[remainingIndex])
+                        remainingIndex += 1
+                    }
+                }
+            }
+        } else {
+            accounts.map { it }
+        }
+
+    val resetDragState = {
+        draggedItemIndex = null
+        dragTargetIndex = null
+        draggedItemKey = null
+        draggedItemStartOffsetPx = 0f
+        draggedItemSizePx = 0f
+        dragOffset = 0f
+        isDraggingActive = false
+    }
 
     // Read UI state from ViewModel
     val showAddDialog = homeViewModel.isAddDialogVisible
@@ -202,8 +219,6 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
     LaunchedEffect(Unit) {
         homeViewModel.loadAccounts(context)
     }
-
-    // TOTP updates are handled in HomeViewModel
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -239,215 +254,192 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                         .fillMaxSize()
                         .dragToReorder(
                             lazyListState = lazyListState,
-                            getDraggedIndex = { draggedItemIndex },
+                            getDragStartOffset = { draggedItemStartOffsetPx },
+                            getDraggedItemSize = { draggedItemSizePx },
                             getDragOffset = { dragOffset },
-                            onDragStart = { index, itemSize ->
-                                if (!isDraggingActive) {
+                            onDragStart = { index, itemOffset, itemSize ->
+                                if (!isDraggingActive && index in accounts.indices) {
                                     draggedItemIndex = index
                                     dragTargetIndex = index
-                                    draggedItemKey = accounts.getOrNull(index)?.id
+                                    draggedItemKey = accounts[index].id
+                                    draggedItemStartOffsetPx = itemOffset.toFloat()
                                     draggedItemSizePx = itemSize.toFloat()
                                     dragOffset = 0f
                                     isDraggingActive = true
                                 }
                             },
                             onDragMove = { delta ->
-                                val originIndex = draggedItemIndex
-                                val visibleItems = lazyListState.layoutInfo.visibleItemsInfo
-                                val originItem = visibleItems.firstOrNull {
-                                    it.index == originIndex
-                                }
-                                val firstItem = visibleItems.firstOrNull()
-                                val lastItem = visibleItems.lastOrNull()
+                                val layoutInfo = lazyListState.layoutInfo
                                 val nextOffset = dragOffset + delta
-                                dragOffset = if (
-                                    originItem != null &&
-                                    firstItem != null &&
-                                    lastItem != null
-                                ) {
-                                    val minimum = (
-                                        firstItem.offset - originItem.offset
-                                    ).toFloat()
-                                    val maximum = (
-                                        lastItem.offset +
-                                            lastItem.size -
-                                            originItem.offset -
-                                            originItem.size
-                                    ).toFloat()
-                                    nextOffset.coerceIn(minimum, maximum)
-                                } else {
-                                    nextOffset
-                                }
+                                val minimum =
+                                    layoutInfo.viewportStartOffset -
+                                        draggedItemStartOffsetPx
+                                val maximum =
+                                    layoutInfo.viewportEndOffset -
+                                        draggedItemSizePx -
+                                        draggedItemStartOffsetPx
+                                dragOffset = nextOffset.coerceIn(
+                                    minimum,
+                                    maximum.coerceAtLeast(minimum)
+                                )
                             },
-                            onTargetChange = { target ->
-                                dragTargetIndex = target
+                            onTargetChange = { requestedTarget ->
+                                if (isDraggingActive && accounts.isNotEmpty()) {
+                                    val target = requestedTarget.coerceIn(
+                                        0,
+                                        accounts.lastIndex
+                                    )
+                                    if (target != dragTargetIndex) {
+                                        val anchorIndex =
+                                            lazyListState.firstVisibleItemIndex
+                                        val anchorOffset =
+                                            lazyListState.firstVisibleItemScrollOffset
+                                        dragTargetIndex = target
+                                        // Prefer the same viewport index over key anchoring. This is
+                                        // essential when the placeholder enters slot 0 or slot 1.
+                                        lazyListState.requestScrollToItem(
+                                            anchorIndex,
+                                            anchorOffset
+                                        )
+                                    }
+                                }
                             },
                             onDragEnd = {
                                 val from = draggedItemIndex
-                                val requestedTarget = dragTargetIndex
-                                if (from == null || requestedTarget == null) {
-                                    isDraggingActive = false
-                                    draggedItemIndex = null
-                                    dragTargetIndex = null
-                                    draggedItemKey = null
-                                    draggedItemSizePx = 0f
-                                    dragOffset = 0f
+                                val target = dragTargetIndex
+                                if (
+                                    from == null ||
+                                    target == null ||
+                                    from !in accounts.indices ||
+                                    target !in accounts.indices
+                                ) {
+                                    resetDragState()
                                 } else {
-                                    val visibleItems =
+                                    val placeholderOffset =
                                         lazyListState.layoutInfo.visibleItemsInfo
-                                    val fromItem = visibleItems.firstOrNull {
-                                        it.index == from
-                                    }
-                                    val targetItem = visibleItems.firstOrNull {
-                                        it.index == requestedTarget
-                                    }
-                                    val target = if (
-                                        fromItem != null && targetItem != null
-                                    ) {
-                                        requestedTarget
-                                    } else {
-                                        from
-                                    }
-                                    val dropOffset = when {
-                                        fromItem == null || targetItem == null -> 0f
-                                        target < from -> {
-                                            (targetItem.offset - fromItem.offset).toFloat()
-                                        }
-                                        target > from -> {
-                                            (
-                                                targetItem.offset +
-                                                    targetItem.size -
-                                                    draggedItemSizePx -
-                                                    fromItem.offset
-                                            )
-                                        }
-                                        else -> 0f
-                                    }
+                                            .firstOrNull { item ->
+                                                item.index == target
+                                            }
+                                            ?.offset
+                                            ?.toFloat()
+                                            ?: draggedItemStartOffsetPx
+                                    val anchorIndex =
+                                        lazyListState.firstVisibleItemIndex
+                                    val anchorOffset =
+                                        lazyListState.firstVisibleItemScrollOffset
 
                                     scope.launch {
                                         Animatable(dragOffset).animateTo(
-                                            targetValue = dropOffset,
-                                            animationSpec = tween(durationMillis = 120)
+                                            targetValue =
+                                                placeholderOffset -
+                                                    draggedItemStartOffsetPx,
+                                            animationSpec = tween(
+                                                durationMillis = 120
+                                            )
                                         ) {
+                                            // Integer-pixel placement is applied by Modifier.offset.
                                             dragOffset = value
                                         }
+                                        lazyListState.requestScrollToItem(
+                                            anchorIndex,
+                                            anchorOffset
+                                        )
                                         if (target != from) {
-                                            // Let displaced cards reach their placeholder slots.
-                                            delay(140)
-                                            suppressPlacementAnimation = true
                                             homeViewModel.moveAccount(
                                                 context,
                                                 from,
                                                 target
                                             )
                                         }
-                                        draggedItemIndex = null
-                                        dragTargetIndex = null
-                                        draggedItemKey = null
-                                        draggedItemSizePx = 0f
-                                        dragOffset = 0f
-                                        isDraggingActive = false
-
-                                        if (suppressPlacementAnimation) {
-                                            // Keep LazyColumn placement animation disabled for the
-                                            // frame in which the final list order is committed.
-                                            withFrameNanos { }
-                                            suppressPlacementAnimation = false
-                                        }
+                                        resetDragState()
                                     }
                                 }
                             },
-                            onDragCancel = {
-                                isDraggingActive = false
-                                draggedItemIndex = null
-                                dragTargetIndex = null
-                                draggedItemKey = null
-                                draggedItemSizePx = 0f
-                                dragOffset = 0f
-                            }
+                            onDragCancel = resetDragState
                         ),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 8.dp,
+                        bottom = 16.dp
+                    )
                 ) {
-                    itemsIndexed(accounts, key = { _, account -> account.id }) { index, account ->
-                        val isDragging = account.id == draggedItemKey
-                        val origin = draggedItemIndex
-                        val target = dragTargetIndex
-                        val slotDisplacement = draggedItemSizePx + with(density) {
-                            16.dp.toPx()
+                    itemsIndexed(
+                        displayedAccounts,
+                        key = { _, account ->
+                            account?.id ?: DRAG_PLACEHOLDER_KEY
                         }
-                        val displacementTarget = if (
-                            isDraggingActive && origin != null && target != null
-                        ) {
-                            when {
-                                target < origin && index in target until origin -> {
-                                    slotDisplacement
-                                }
-                                target > origin && index in (origin + 1)..target -> {
-                                    -slotDisplacement
-                                }
-                                else -> 0f
-                            }
+                    ) { _, account ->
+                        if (account == null) {
+                            Spacer(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(
+                                        with(density) {
+                                            draggedItemSizePx.toDp()
+                                        }
+                                    )
+                            )
                         } else {
-                            0f
-                        }
-                        val displacedOffset by animateFloatAsState(
-                            targetValue = displacementTarget,
-                            animationSpec = tween(durationMillis = 120),
-                            label = "drag_placeholder"
-                        )
-                        val elevation by animateDpAsState(
-                            targetValue = if (isDraggingActive && isDragging) {
-                                16.dp
-                            } else {
-                                0.dp
-                            },
-                            label = "drag_elevation"
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .zIndex(if (isDragging) 10f else 0f)
-                                .graphicsLayer {
-                                    translationY = when {
-                                        isDragging -> dragOffset
-                                        isDraggingActive -> displacedOffset
-                                        else -> 0f
-                                    }
-                                    shadowElevation = elevation.toPx()
-                                    shape = RoundedCornerShape(28.dp)
-                                    val scale = if (
-                                        isDraggingActive && isDragging
-                                    ) {
-                                        1.05f
-                                    } else {
-                                        1.0f
-                                    }
-                                    scaleX = scale
-                                    scaleY = scale
-                                }
-                                .animateItem(
-                                    placementSpec = if (
-                                        isDraggingActive ||
-                                        suppressPlacementAnimation
-                                    ) {
-                                        null
-                                    } else {
-                                        spring(
-                                            stiffness = Spring.StiffnessMediumLow
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .animateItem(
+                                        placementSpec = spring(
+                                            stiffness =
+                                                Spring.StiffnessMediumLow
+                                        )
+                                    )
+                            ) {
+                                AccountItemCard(
+                                    account = account,
+                                    codeProvider = {
+                                        homeViewModel.otpCodes[account.id] ?: ""
+                                    },
+                                    progressProvider = progressProvider,
+                                    onEditPasswordClick = {
+                                        homeViewModel.selectAccountForEdit(
+                                            account
+                                        )
+                                    },
+                                    onDeleteClick = {
+                                        homeViewModel.selectAccountForDelete(
+                                            account
                                         )
                                     }
                                 )
-                        ) {
-                            AccountItemCard(
-                                account = account,
-                                codeProvider = { homeViewModel.otpCodes[account.id] ?: "" },
-                                progressProvider = progressProvider,
-                                onEditPasswordClick = { homeViewModel.selectAccountForEdit(account) },
-                                onDeleteClick = { homeViewModel.selectAccountForDelete(account) }
-                            )
+                            }
                         }
+                    }
+                }
+
+                if (isDraggingActive && draggedAccount != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .offset {
+                                IntOffset(
+                                    x = 0,
+                                    y = (
+                                        draggedItemStartOffsetPx +
+                                            dragOffset
+                                        ).roundToInt()
+                                )
+                            }
+                            .zIndex(20f)
+                    ) {
+                        AccountItemCard(
+                            account = draggedAccount,
+                            codeProvider = {
+                                homeViewModel.otpCodes[draggedAccount.id] ?: ""
+                            },
+                            progressProvider = progressProvider,
+                            onEditPasswordClick = {},
+                            onDeleteClick = {},
+                            isDragging = true
+                        )
                     }
                 }
             }
@@ -492,12 +484,15 @@ fun AccountItemCard(
     codeProvider: () -> String,
     progressProvider: () -> Float,
     onEditPasswordClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    isDragging: Boolean = false
 ) {
     val menuExpanded = remember { mutableStateOf(false) }
 
     Card(
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (isDragging) 16.dp else 0.dp
+        ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
         shape = RoundedCornerShape(28.dp),
         modifier = Modifier.fillMaxWidth()
