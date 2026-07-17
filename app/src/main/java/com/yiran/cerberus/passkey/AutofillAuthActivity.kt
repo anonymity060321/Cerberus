@@ -9,6 +9,10 @@ import android.view.autofill.AutofillManager
 import android.view.autofill.AutofillValue
 import android.service.autofill.Dataset
 import androidx.activity.compose.BackHandler
+import androidx.credentials.GetCredentialResponse
+import androidx.credentials.GetPasswordOption
+import androidx.credentials.PasswordCredential
+import androidx.credentials.provider.PendingIntentHandler
 import androidx.activity.compose.setContent
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -76,17 +80,50 @@ class AutofillAuthActivity : FragmentActivity() {
             return
         }
 
-        val targetLabel = intent.getStringExtra(EXTRA_TARGET_LABEL)
-            ?.trim()
-            ?.take(100)
-            ?.takeIf(String::isNotEmpty)
-            ?: "当前登录页面"
-        val targetKey = intent.getStringExtra(EXTRA_TARGET_KEY)
-            ?.takeIf { it.length in 1..512 }
-            ?: return cancelAndFinish()
-        val targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE)
-            ?.takeIf { it.length in 1..255 }
-            ?: return cancelAndFinish()
+        val credentialManagerMode =
+            intent.getStringExtra(EXTRA_MODE) == MODE_CREDENTIAL_MANAGER_PASSWORD
+        val providerRequest = if (credentialManagerMode) {
+            runCatching {
+                PendingIntentHandler.retrieveProviderGetCredentialRequest(intent)
+            }.getOrNull()
+        } else {
+            null
+        }
+        val passwordOption = providerRequest
+            ?.credentialOptions
+            ?.filterIsInstance<GetPasswordOption>()
+            ?.firstOrNull()
+        if (credentialManagerMode && (providerRequest == null || passwordOption == null)) {
+            cancelAndFinish()
+            return
+        }
+
+        val targetPackage = if (credentialManagerMode) {
+            providerRequest!!.callingAppInfo.packageName
+                .takeIf { it.length in 1..255 }
+                ?: return cancelAndFinish()
+        } else {
+            intent.getStringExtra(EXTRA_TARGET_PACKAGE)
+                ?.takeIf { it.length in 1..255 }
+                ?: return cancelAndFinish()
+        }
+        val targetLabel = if (credentialManagerMode) {
+            applicationLabel(targetPackage)
+        } else {
+            intent.getStringExtra(EXTRA_TARGET_LABEL)
+                ?.trim()
+                ?.take(100)
+                ?.takeIf(String::isNotEmpty)
+                ?: "当前登录页面"
+        }
+        val targetKey = if (credentialManagerMode) {
+            "app:$targetPackage"
+        } else {
+            intent.getStringExtra(EXTRA_TARGET_KEY)
+                ?.takeIf { it.length in 1..512 }
+                ?: return cancelAndFinish()
+        }
+        val allowedUserIds = passwordOption?.allowedUserIds.orEmpty()
 
         setContent {
             CerberusTheme {
@@ -94,7 +131,12 @@ class AutofillAuthActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AutofillAuthScreen(targetLabel, targetKey, targetPackage)
+                    AutofillAuthScreen(
+                        targetLabel,
+                        targetKey,
+                        targetPackage,
+                        allowedUserIds
+                    )
                 }
             }
         }
@@ -104,7 +146,8 @@ class AutofillAuthActivity : FragmentActivity() {
     private fun AutofillAuthScreen(
         targetLabel: String,
         targetKey: String,
-        targetPackage: String
+        targetPackage: String,
+        allowedUserIds: Set<String>
     ) {
         val scope = rememberCoroutineScope()
         var authenticated by remember { mutableStateOf(false) }
@@ -124,7 +167,11 @@ class AutofillAuthActivity : FragmentActivity() {
             scope.launch {
                 val loadedAccounts = withContext(Dispatchers.IO) {
                     SecurityUtil.loadAccounts(this@AutofillAuthActivity)
-                        .filter { it.username.isNotBlank() && it.password.isNotBlank() }
+                        .filter {
+                            it.username.isNotBlank() &&
+                                it.password.isNotBlank() &&
+                                (allowedUserIds.isEmpty() || it.username in allowedUserIds)
+                        }
                 }
                 masterPassword = ""
                 errorText = ""
@@ -376,6 +423,11 @@ class AutofillAuthActivity : FragmentActivity() {
             cancelAndFinish()
             return
         }
+        if (intent.getStringExtra(EXTRA_MODE) == MODE_CREDENTIAL_MANAGER_PASSWORD) {
+            finishCredentialManagerPassword(account)
+            return
+        }
+
         val usernameId = intent.getParcelableExtra(EXTRA_USERNAME_ID, AutofillId::class.java)
         val passwordId = intent.getParcelableExtra(EXTRA_PASSWORD_ID, AutofillId::class.java)
         val datasetBuilder = Dataset.Builder()
@@ -397,6 +449,40 @@ class AutofillAuthActivity : FragmentActivity() {
         finish()
     }
 
+    private fun finishCredentialManagerPassword(account: Account) {
+        val providerRequest = runCatching {
+            PendingIntentHandler.retrieveProviderGetCredentialRequest(intent)
+        }.getOrNull() ?: return cancelAndFinish()
+        val passwordOption = providerRequest.credentialOptions
+            .filterIsInstance<GetPasswordOption>()
+            .firstOrNull()
+            ?: return cancelAndFinish()
+        if (
+            passwordOption.allowedUserIds.isNotEmpty() &&
+            account.username !in passwordOption.allowedUserIds
+        ) {
+            cancelAndFinish()
+            return
+        }
+
+        val result = Intent()
+        val response = GetCredentialResponse(
+            PasswordCredential(account.username, account.password)
+        )
+        PendingIntentHandler.setGetCredentialResponse(result, response, providerRequest)
+        setResult(Activity.RESULT_OK, result)
+        finish()
+    }
+
+    private fun applicationLabel(packageName: String): String = runCatching {
+        val info = packageManager.getApplicationInfo(packageName, 0)
+        packageManager.getApplicationLabel(info).toString()
+    }.getOrDefault("当前应用")
+        .filter { !it.isISOControl() }
+        .trim()
+        .take(100)
+        .ifEmpty { "当前应用" }
+
     private fun cancelAndFinish() {
         setResult(Activity.RESULT_CANCELED, Intent())
         finish()
@@ -408,5 +494,7 @@ class AutofillAuthActivity : FragmentActivity() {
         const val EXTRA_TARGET_LABEL = "cerberus.autofill.TARGET_LABEL"
         const val EXTRA_TARGET_KEY = "cerberus.autofill.TARGET_KEY"
         const val EXTRA_TARGET_PACKAGE = "cerberus.autofill.TARGET_PACKAGE"
+        const val EXTRA_MODE = "cerberus.auth.MODE"
+        const val MODE_CREDENTIAL_MANAGER_PASSWORD = "credential_manager_password"
     }
 }
