@@ -178,7 +178,7 @@ object SecurityUtil {
 
     fun canUseBiometric(context: Context): Boolean {
         return BiometricManager.from(context).canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            BiometricManager.Authenticators.BIOMETRIC_STRONG
         ) == BiometricManager.BIOMETRIC_SUCCESS
     }
 

@@ -58,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
@@ -81,9 +82,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.3.0"
+            } ?: "1.3.1"
         } catch (_ : Exception) {
-            "1.3.0"
+            "1.3.1"
         }
     }
 
@@ -353,19 +354,14 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                         icon = Icons.Default.Key,
                         label = "Passkey 凭据提供程序",
                         value = if (PasskeyStore.legacyCount(context) > 0) {
-                            "${PasskeyStore.count(context)} 个硬件密钥 / ${PasskeyStore.legacyCount(context)} 个旧版密钥需重建"
+                            "${PasskeyStore.legacyCount(context)} 个旧版 · 需重建"
                         } else {
-                            "${PasskeyStore.count(context)} 个硬件保护密钥 / 系统设置"
+                            "${PasskeyStore.count(context)} 个 · 系统设置"
                         },
                         onClick = {
                             val packageUri = "package:${context.packageName}".toUri()
                             runCatching {
                                 if (Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)) {
-                                    Toast.makeText(
-                                        context,
-                                        "HyperOS 兼容模式：Cerberus 将成为默认自动填充服务，但仅处理 Passkey",
-                                        Toast.LENGTH_LONG
-                                    ).show()
                                     context.startActivity(
                                         Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
                                             data = packageUri
@@ -574,17 +570,23 @@ fun AboutItem(
         }
         Spacer(modifier = Modifier.width(16.dp))
         Text(
-            text = label, 
-            style = MaterialTheme.typography.bodyLarge, 
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             color = if (onClick != null || highlightValue) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = if (onClick != null || highlightValue) FontWeight.Bold else FontWeight.Normal
+            fontWeight = if (onClick != null || highlightValue) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

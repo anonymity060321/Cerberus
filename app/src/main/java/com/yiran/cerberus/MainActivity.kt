@@ -97,18 +97,27 @@ class MainActivity : FragmentActivity() {
                     var backProgress by remember { mutableFloatStateOf(0f) }
 
                     val triggerBiometric = {
-                        showBiometricPrompt(activity,
-                            onSuccess = { 
-                                isUnlocked = true 
-                                isCheckingAuth = false
-                                showPasswordInput = false
-                                SecurityUtil.markAuthenticated(context)
-                            },
-                            onCancel = { 
-                                showPasswordInput = true 
-                                isCheckingAuth = false
-                            }
-                        )
+                        if (
+                            SecurityUtil.isBiometricEnabled(context) &&
+                            SecurityUtil.canUseBiometric(context)
+                        ) {
+                            showBiometricPrompt(
+                                activity,
+                                onSuccess = {
+                                    isUnlocked = true
+                                    isCheckingAuth = false
+                                    showPasswordInput = false
+                                    SecurityUtil.markAuthenticated(context)
+                                },
+                                onCancel = {
+                                    showPasswordInput = true
+                                    isCheckingAuth = false
+                                }
+                            )
+                        } else {
+                            showPasswordInput = true
+                            isCheckingAuth = false
+                        }
                     }
 
                     val performAuthCheck = {
@@ -490,7 +499,11 @@ fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> 
             modifier = Modifier.fillMaxWidth(),
             isError = errorText.isNotEmpty(),
             trailingIcon = {
-                if (!isFirstTime && SecurityUtil.canUseBiometric(context)) {
+                if (
+                    !isFirstTime &&
+                    SecurityUtil.isBiometricEnabled(context) &&
+                    SecurityUtil.canUseBiometric(context)
+                ) {
                     IconButton(onClick = onBiometricRequest) {
                         Icon(Icons.Default.Fingerprint, contentDescription = "Biometric", tint = MaterialTheme.colorScheme.primary)
                     }
@@ -550,7 +563,11 @@ fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> 
             Text(if (isFirstTime) "设置并进入" else "验证解锁")
         }
 
-        if (!isFirstTime && SecurityUtil.canUseBiometric(context)) {
+        if (
+                    !isFirstTime &&
+                    SecurityUtil.isBiometricEnabled(context) &&
+                    SecurityUtil.canUseBiometric(context)
+                ) {
             Spacer(modifier = Modifier.height(12.dp))
             TextButton(onClick = onBiometricRequest) {
                 Icon(Icons.Default.Fingerprint, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -579,7 +596,10 @@ fun LockScreen(onPasswordClick: () -> Unit, onBiometricClick: () -> Unit) {
         Text(text = "App 已安全锁定", fontSize = 20.sp, fontWeight = FontWeight.Medium)
         Spacer(modifier = Modifier.height(48.dp))
         
-        if (SecurityUtil.canUseBiometric(context)) {
+        if (
+            SecurityUtil.isBiometricEnabled(context) &&
+            SecurityUtil.canUseBiometric(context)
+        ) {
             Button(onClick = onBiometricClick, modifier = Modifier.fillMaxWidth(0.7f)) {
                 Text("指纹解锁")
             }
