@@ -179,17 +179,27 @@ class MainActivity : FragmentActivity() {
                         }
                     }
 
-                    Box(modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            if (backProgress > 0f) {
-                                val scale = 1f - (backProgress * 0.05f)
-                                scaleX = scale
-                                scaleY = scale
-                                alpha = 1f - (backProgress * 0.2f)
-                            }
+                    val contentModifier =
+                        if (
+                            isUnlocked &&
+                            currentScreen == "settings" &&
+                            backProgress > 0f
+                        ) {
+                            Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    val scale = 1f - (backProgress * 0.05f)
+                                    scaleX = scale
+                                    scaleY = scale
+                                    alpha = 1f - (backProgress * 0.2f)
+                                }
+                        } else {
+                            // Keep onboarding and ordinary scrolling out of an offscreen layer.
+                            // This avoids text resampling artifacts on some HyperOS renderers.
+                            Modifier.fillMaxSize()
                         }
-                    ) {
+
+                    Box(modifier = contentModifier) {
                         when {
                             onboardingStep == 1 -> {
                                 TermsAndConditionsScreen(onAccepted = {
