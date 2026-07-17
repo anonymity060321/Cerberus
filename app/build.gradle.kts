@@ -19,10 +19,6 @@ android {
 
     ndkVersion = "29.0.14206865"
 
-    buildFeatures {
-        buildConfig = true
-    }
-
     sourceSets {
         getByName("main") {
             jniLibs.directories.add("src/main/jniLibs")

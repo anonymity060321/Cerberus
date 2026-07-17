@@ -1,6 +1,7 @@
 package com.yiran.cerberus.ui.home
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import android.view.autofill.AutofillManager
@@ -71,7 +72,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.yiran.cerberus.passkey.PasskeyStore
-import com.yiran.cerberus.BuildConfig
 import com.yiran.cerberus.util.SecurityUtil
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,7 +80,12 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     
-    val versionName = BuildConfig.VERSION_NAME
+    val versionName = remember(context) {
+        context.packageManager.getPackageInfo(
+            context.packageName,
+            PackageManager.PackageInfoFlags.of(0)
+        ).versionName ?: "未知"
+    }
 
     val isBiometricEnabled = remember {
         mutableStateOf(SecurityUtil.isBiometricEnabled(context))
