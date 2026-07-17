@@ -45,13 +45,6 @@
             android:noHistory="true"
             android:label="@string/autofill_auth_title" />
 
-        <activity
-            android:name=".passkey.PasswordCredentialActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:label="@string/autofill_auth_title" />
-
         <service
             android:name=".passkey.CerberusCredentialProviderService"
             android:enabled="true"

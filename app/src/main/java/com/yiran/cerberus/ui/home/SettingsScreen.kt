@@ -2,7 +2,9 @@ package com.yiran.cerberus.ui.home
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
+import android.view.autofill.AutofillManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -70,7 +72,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.yiran.cerberus.passkey.CredentialProviderController
-import com.yiran.cerberus.passkey.CredentialProviderStatus
 import com.yiran.cerberus.passkey.PasskeyStore
 import com.yiran.cerberus.util.SecurityUtil
 
@@ -107,7 +108,6 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     val credentialProviderStatus = remember {
         mutableStateOf(credentialProviderController.currentStatus())
     }
-    val showCredentialProviderDialog = remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -136,6 +136,24 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         storageError?.let { message ->
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             homeViewModel.consumeStorageError()
+        }
+    }
+
+    val autofillAuthorizationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        val enabledBySystem = runCatching {
+            context.getSystemService(AutofillManager::class.java)
+                ?.hasEnabledAutofillServices() == true
+        }.getOrDefault(false)
+        if (!enabledBySystem) {
+            SecurityUtil.setPasswordAutofillEnabled(context, false)
+            isPasswordAutofillEnabled.value = false
+            Toast.makeText(
+                context,
+                "未在系统中启用 Cerberus，账号密码自动填充保持关闭",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -290,60 +308,6 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         )
     }
 
-    if (showCredentialProviderDialog.value) {
-        val status = credentialProviderStatus.value
-        StyledDialog(
-            onDismissRequest = { showCredentialProviderDialog.value = false },
-            title = "通行密钥服务状态",
-            content = {
-                Text(
-                    text = when (status) {
-                        CredentialProviderStatus.ENABLED ->
-                            "Cerberus 已被系统启用为通行密钥提供程序。"
-                        CredentialProviderStatus.DISABLED ->
-                            "Cerberus 尚未被系统启用为通行密钥提供程序。"
-                        CredentialProviderStatus.SETTINGS_UNAVAILABLE ->
-                            "当前系统没有向第三方应用提供可用的通行密钥服务设置入口。"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            },
-            confirmButton = {
-                if (status == CredentialProviderStatus.SETTINGS_UNAVAILABLE) {
-                    TextButton(
-                        onClick = { showCredentialProviderDialog.value = false }
-                    ) { Text("知道了", fontWeight = FontWeight.Bold) }
-                } else {
-                    TextButton(
-                        onClick = {
-                            showCredentialProviderDialog.value = false
-                            if (
-                                !credentialProviderController
-                                    .openSettings()
-                            ) {
-                                Toast.makeText(
-                                    context,
-                                    "系统未提供可用的通行密钥服务设置入口",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        }
-                    ) { Text("打开系统设置", fontWeight = FontWeight.Bold) }
-                }
-            },
-            dismissButton = if (status != CredentialProviderStatus.SETTINGS_UNAVAILABLE) {
-                {
-                    TextButton(
-                        onClick = { showCredentialProviderDialog.value = false }
-                    ) { Text("关闭") }
-                }
-            } else {
-                null
-            }
-        )
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -449,22 +413,29 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                         icon = Icons.Default.Key,
                         label = "通行密钥服务",
                         value = if (legacyPasskeyCount.intValue > 0) {
-                            "${legacyPasskeyCount.intValue} 旧版 · " +
+                            "${legacyPasskeyCount.intValue} 个旧版 · " +
                                 credentialProviderStatus.value.displayText
                         } else {
                             "${passkeyCount.intValue} 个 · " +
                                 credentialProviderStatus.value.displayText
                         },
                         onClick = {
-                            if (
-                                credentialProviderStatus.value ==
-                                    CredentialProviderStatus.SETTINGS_UNAVAILABLE
-                            ) {
-                                showCredentialProviderDialog.value = true
-                            } else if (!credentialProviderController.openSettings()) {
-                                credentialProviderStatus.value =
-                                    credentialProviderController.currentStatus()
-                                showCredentialProviderDialog.value = true
+                            val packageUri = "package:${context.packageName}".toUri()
+                            runCatching {
+                                if (Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)) {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
+                                            data = packageUri
+                                        }
+                                    )
+                                } else {
+                                    androidx.credentials.CredentialManager
+                                        .create(context)
+                                        .createSettingsPendingIntent()
+                                        .send()
+                                }
+                            }.onFailure {
+                                Toast.makeText(context, "无法打开凭据提供程序设置", Toast.LENGTH_SHORT).show()
                             }
                         }
                     )
@@ -499,22 +470,26 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                                 SecurityUtil.setPasswordAutofillEnabled(context, enabled)
                                 isPasswordAutofillEnabled.value = enabled
                                 if (enabled) {
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(
-                                                Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE
-                                            ).apply {
-                                                data = "package:${context.packageName}".toUri()
-                                            }
-                                        )
-                                    }.onFailure {
-                                        SecurityUtil.setPasswordAutofillEnabled(context, false)
-                                        isPasswordAutofillEnabled.value = false
-                                        Toast.makeText(
-                                            context,
-                                            "系统未提供可用的账号密码自动填充设置入口",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                    val enabledBySystem = runCatching {
+                                        context.getSystemService(AutofillManager::class.java)
+                                            ?.hasEnabledAutofillServices() == true
+                                    }.getOrDefault(false)
+                                    if (!enabledBySystem) {
+                                        runCatching {
+                                            autofillAuthorizationLauncher.launch(
+                                                Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
+                                                    data = "package:${context.packageName}".toUri()
+                                                }
+                                            )
+                                        }.onFailure {
+                                            SecurityUtil.setPasswordAutofillEnabled(context, false)
+                                            isPasswordAutofillEnabled.value = false
+                                            Toast.makeText(
+                                                context,
+                                                "无法请求系统自动填充授权",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     }
                                 }
                             }

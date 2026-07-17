@@ -2,14 +2,14 @@ package com.yiran.cerberus.passkey
 
 import android.content.ComponentName
 import android.content.Context
+import android.view.autofill.AutofillManager
 import androidx.credentials.CredentialManager
 
 /**
- * Android 16 Credential Manager provider state and settings entry point.
+ * Reports the system authorization state for Cerberus as a passkey provider.
  *
- * Passwords and passkeys are exposed by the same CredentialProviderService. Legacy Autofill state
- * is deliberately not consulted because it is a separate system service and cannot prove that the
- * credential provider is enabled.
+ * Credential Manager is authoritative for passkeys. HyperOS may authorize only the separate
+ * Autofill Service, so that state must never be presented as an enabled passkey provider.
  */
 class CredentialProviderController(context: Context) {
     private val appContext = context.applicationContext
@@ -18,28 +18,24 @@ class CredentialProviderController(context: Context) {
         CerberusCredentialProviderService::class.java
     )
 
-    fun currentStatus(): CredentialProviderStatus {
-        if (isEnabled()) return CredentialProviderStatus.ENABLED
-        return if (settingsPendingIntentAvailable()) {
-            CredentialProviderStatus.DISABLED
-        } else {
-            CredentialProviderStatus.SETTINGS_UNAVAILABLE
-        }
-    }
+    fun currentStatus(): CredentialProviderStatus = resolveCredentialProviderStatus(
+        isCredentialProviderEnabled = isCredentialProviderEnabled(),
+        isCerberusAutofillEnabled = isCerberusAutofillEnabled(),
+        isSettingsEntryAvailable = isSettingsEntryAvailable()
+    )
 
-    fun openSettings(): Boolean = runCatching {
-        CredentialManager.create(appContext)
-            .createSettingsPendingIntent()
-            .send()
-        true
-    }.getOrDefault(false)
-
-    private fun isEnabled(): Boolean = runCatching {
+    private fun isCredentialProviderEnabled(): Boolean = runCatching {
         appContext.getSystemService(android.credentials.CredentialManager::class.java)
             ?.isEnabledCredentialProviderService(providerComponent) == true
     }.getOrDefault(false)
 
-    private fun settingsPendingIntentAvailable(): Boolean = runCatching {
+    @Suppress("DEPRECATION")
+    private fun isCerberusAutofillEnabled(): Boolean = runCatching {
+        appContext.getSystemService(AutofillManager::class.java)
+            ?.hasEnabledAutofillServices() == true
+    }.getOrDefault(false)
+
+    private fun isSettingsEntryAvailable(): Boolean = runCatching {
         CredentialManager.create(appContext).createSettingsPendingIntent()
         true
     }.getOrDefault(false)
@@ -47,6 +43,18 @@ class CredentialProviderController(context: Context) {
 
 enum class CredentialProviderStatus(val displayText: String) {
     ENABLED("已启用"),
+    AUTOFILL_ONLY("仅自动填充"),
     DISABLED("未启用"),
-    SETTINGS_UNAVAILABLE("系统设置不可用")
+    UNSUPPORTED("系统不支持")
+}
+
+internal fun resolveCredentialProviderStatus(
+    isCredentialProviderEnabled: Boolean,
+    isCerberusAutofillEnabled: Boolean,
+    isSettingsEntryAvailable: Boolean
+): CredentialProviderStatus = when {
+    isCredentialProviderEnabled -> CredentialProviderStatus.ENABLED
+    isCerberusAutofillEnabled -> CredentialProviderStatus.AUTOFILL_ONLY
+    isSettingsEntryAvailable -> CredentialProviderStatus.DISABLED
+    else -> CredentialProviderStatus.UNSUPPORTED
 }

@@ -24,9 +24,9 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Legacy Autofill provider for login fields that do not use Credential Manager.
+ * Autofill provider used both for password filling and for the HyperOS credential-provider bridge.
  *
- * Fill requests receive only a generic authenticated entry. Account names, usernames and
+ * Fill requests only receive a generic, authenticated entry. Account names, usernames and
  * passwords are loaded after the user authenticates in [AutofillAuthActivity].
  */
 class CerberusAutofillService : AutofillService() {
