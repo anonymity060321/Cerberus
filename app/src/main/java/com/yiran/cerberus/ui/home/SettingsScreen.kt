@@ -2,7 +2,6 @@ package com.yiran.cerberus.ui.home
 
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.provider.Settings
 import android.view.autofill.AutofillManager
 import android.widget.Toast
@@ -101,12 +100,17 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     val showTimeMenu = remember { mutableStateOf(false) }
     val passkeyCount = remember { mutableIntStateOf(PasskeyStore.count(context)) }
     val legacyPasskeyCount = remember { mutableIntStateOf(PasskeyStore.legacyCount(context)) }
+    val isPasskeyProviderEnabled = remember {
+        mutableStateOf(isCerberusCredentialProviderEnabled(context))
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 passkeyCount.intValue = PasskeyStore.count(context)
                 legacyPasskeyCount.intValue = PasskeyStore.legacyCount(context)
+                isPasskeyProviderEnabled.value =
+                    isCerberusCredentialProviderEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -406,25 +410,25 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                         value = if (legacyPasskeyCount.intValue > 0) {
                             "${legacyPasskeyCount.intValue} 个旧版"
                         } else {
-                            "${passkeyCount.intValue} 个 · 设置"
+                            val status = if (isPasskeyProviderEnabled.value) {
+                                "已启用"
+                            } else {
+                                "未启用"
+                            }
+                            "${passkeyCount.intValue} 个 · $status"
                         },
                         onClick = {
-                            val packageUri = "package:${context.packageName}".toUri()
                             runCatching {
-                                if (Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)) {
-                                    context.startActivity(
-                                        Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
-                                            data = packageUri
-                                        }
-                                    )
-                                } else {
-                                    androidx.credentials.CredentialManager
-                                        .create(context)
-                                        .createSettingsPendingIntent()
-                                        .send()
-                                }
+                                androidx.credentials.CredentialManager
+                                    .create(context)
+                                    .createSettingsPendingIntent()
+                                    .send()
                             }.onFailure {
-                                Toast.makeText(context, "无法打开凭据提供程序设置", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    "无法打开通行密钥服务设置",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                     )
@@ -643,6 +647,18 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
         }
     }
 }
+
+private fun isCerberusCredentialProviderEnabled(
+    context: android.content.Context
+): Boolean = runCatching {
+    val manager =
+        context.getSystemService(android.credentials.CredentialManager::class.java)
+    val component = android.content.ComponentName(
+        context,
+        com.yiran.cerberus.passkey.CerberusCredentialProviderService::class.java
+    )
+    manager?.isEnabledCredentialProviderService(component) == true
+}.getOrDefault(false)
 
 @Composable
 fun AboutItem(
