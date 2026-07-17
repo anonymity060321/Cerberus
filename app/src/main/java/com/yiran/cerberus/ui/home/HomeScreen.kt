@@ -765,7 +765,7 @@ fun OtpSection(
         Column {
             if (otpType == OtpType.STEAM) {
                 Text(
-                    text = "STEAM GUARD",
+                    text = "五字符验证码",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Bold
@@ -911,7 +911,7 @@ fun AddAccountDialog(
                 } else {
                     Text(
                         text = if (selectedOtpType.value == OtpType.STEAM) {
-                            "配置 ${name.value} 的 Steam Guard 登录令牌。"
+                            "配置 ${name.value} 的五字符动态验证码令牌。"
                         } else {
                             "配置 ${name.value} 的 TOTP 安全令牌。"
                         },
@@ -920,7 +920,7 @@ fun AddAccountDialog(
                     )
                     Box(modifier = Modifier.fillMaxWidth()) {
                         StyledTextField(
-                            value = if (selectedOtpType.value == OtpType.STEAM) "Steam Guard" else "标准 TOTP",
+                            value = if (selectedOtpType.value == OtpType.STEAM) "五字符动态验证码" else "标准 TOTP",
                             onValueChange = { },
                             readOnly = true,
                             label = "验证码类型",
@@ -949,7 +949,7 @@ fun AddAccountDialog(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Steam Guard") },
+                                text = { Text("五字符动态验证码") },
                                 onClick = {
                                     selectedOtpType.value = OtpType.STEAM
                                     selectedAlgo.value = OtpAlgorithm.SHA1
@@ -970,7 +970,7 @@ fun AddAccountDialog(
                             }
                             secretError.value = ""
                         },
-                        label = if (selectedOtpType.value == OtpType.STEAM) "Steam 验证密钥" else "TOTP 密钥",
+                        label = if (selectedOtpType.value == OtpType.STEAM) "五字符验证码密钥" else "TOTP 密钥",
                         isError = secretError.value.isNotEmpty(),
                         supportingText = secretError.value
                     )
@@ -1029,7 +1029,7 @@ fun AddAccountDialog(
                         }
                         if (!isSecretValid) {
                             secretError.value = if (selectedOtpType.value == OtpType.STEAM) {
-                                "Steam 验证密钥格式不正确"
+                                "五字符验证码密钥格式不正确"
                             } else {
                                 "密钥格式错误"
                             }

@@ -66,6 +66,10 @@ class AutofillAuthActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setResult(Activity.RESULT_CANCELED, Intent().putExtras(Bundle.EMPTY))
+        if (!SecurityUtil.isPasswordAutofillEnabled(this)) {
+            finish()
+            return
+        }
 
         val targetLabel = intent.getStringExtra(EXTRA_TARGET_LABEL)
             ?.trim()

@@ -46,6 +46,7 @@ object SecurityUtil {
     private const val KEY_MASTER_PASSWORD_HASH = "master_password_hash"
     private const val KEY_SALT = "master_password_salt"
     private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
+    private const val KEY_PASSWORD_AUTOFILL_ENABLED = "password_autofill_enabled"
     private const val KEY_ACCOUNTS = "stored_accounts"
     private const val KEY_TERMS_ACCEPTED = "terms_accepted"
 
@@ -184,4 +185,10 @@ object SecurityUtil {
 
     fun setBiometricEnabled(context: Context, enabled: Boolean) = getEncryptedPrefs(context).edit { putBoolean(KEY_BIOMETRIC_ENABLED, enabled) }
     fun isBiometricEnabled(context: Context): Boolean = getEncryptedPrefs(context).getBoolean(KEY_BIOMETRIC_ENABLED, false)
+
+    fun setPasswordAutofillEnabled(context: Context, enabled: Boolean) =
+        getEncryptedPrefs(context).edit { putBoolean(KEY_PASSWORD_AUTOFILL_ENABLED, enabled) }
+
+    fun isPasswordAutofillEnabled(context: Context): Boolean =
+        getEncryptedPrefs(context).getBoolean(KEY_PASSWORD_AUTOFILL_ENABLED, false)
 }

@@ -36,7 +36,11 @@ class CerberusAutofillService : AutofillService() {
         cancellationSignal: CancellationSignal,
         callback: FillCallback
     ) {
-        if (cancellationSignal.isCanceled || !SecurityUtil.isMasterPasswordSet(this)) {
+        if (
+            cancellationSignal.isCanceled ||
+            !SecurityUtil.isPasswordAutofillEnabled(this) ||
+            !SecurityUtil.isMasterPasswordSet(this)
+        ) {
             callback.onSuccess(null)
             return
         }
