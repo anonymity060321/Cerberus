@@ -536,7 +536,7 @@ fun AccountItemCard(
 
                 if (account.hasOtp && account.secretKey.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    OtpSection(codeProvider, progressProvider, account.otpType)
+                    OtpSection(codeProvider, progressProvider)
                 }
             }
 
@@ -726,8 +726,7 @@ fun EditPasswordDialog(
 @Composable
 fun OtpSection(
     codeProvider: () -> String,
-    progressProvider: () -> Float,
-    otpType: OtpType
+    progressProvider: () -> Float
 ) {
     val context = LocalContext.current
     val otpCode = codeProvider()
@@ -757,23 +756,13 @@ fun OtpSection(
         verticalAlignment = Alignment.CenterVertically
     ) {
         val displayCode = if (otpCode.length == 6) "${otpCode.take(3)} ${otpCode.substring(3)}" else otpCode
-        Column {
-            if (otpType == OtpType.STEAM) {
-                Text(
-                    text = "五字符验证码",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Text(
-                text = displayCode,
-                style = MaterialTheme.typography.headlineMedium,
-                color = progressColor,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 2.sp
-            )
-        }
+        Text(
+            text = displayCode,
+            style = MaterialTheme.typography.headlineMedium,
+            color = progressColor,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 2.sp
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text = "${remainingSeconds}s", style = MaterialTheme.typography.labelMedium, color = progressColor, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.width(8.dp))
@@ -965,7 +954,7 @@ fun AddAccountDialog(
                             }
                             secretError.value = ""
                         },
-                        label = if (selectedOtpType.value == OtpType.STEAM) "五字符验证码密钥" else "TOTP 密钥",
+                        label = if (selectedOtpType.value == OtpType.STEAM) "shared_secret" else "TOTP 密钥",
                         isError = secretError.value.isNotEmpty(),
                         supportingText = secretError.value
                     )
@@ -1024,7 +1013,7 @@ fun AddAccountDialog(
                         }
                         if (!isSecretValid) {
                             secretError.value = if (selectedOtpType.value == OtpType.STEAM) {
-                                "五字符验证码密钥格式不正确"
+                                "shared_secret 格式不正确"
                             } else {
                                 "密钥格式错误"
                             }
