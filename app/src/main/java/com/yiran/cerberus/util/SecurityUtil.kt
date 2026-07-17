@@ -104,6 +104,7 @@ object SecurityUtil {
     }
 
     fun setAutoLockTime(context: Context, timeMs: Long) {
+        require(timeMs >= 0L) { "Auto-lock time cannot be negative" }
         getEncryptedPrefs(context).edit { putLong(KEY_AUTO_LOCK_TIME, timeMs) }
     }
 
@@ -163,7 +164,11 @@ object SecurityUtil {
         }
     }
 
-    fun isMasterPasswordSet(context: Context): Boolean = getEncryptedPrefs(context).contains(KEY_MASTER_PASSWORD_HASH)
+    fun isMasterPasswordSet(context: Context): Boolean {
+        val preferences = getEncryptedPrefs(context)
+        return preferences.contains(KEY_MASTER_PASSWORD_HASH) &&
+            preferences.contains(KEY_SALT)
+    }
 
     fun setMasterPassword(context: Context, password: String) {
         val result = rustHashMasterPassword(password)

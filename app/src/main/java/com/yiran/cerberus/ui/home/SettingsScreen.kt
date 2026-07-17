@@ -4,7 +4,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
-import android.view.autofill.AutofillManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -142,10 +141,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
     val autofillAuthorizationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
-        val enabledBySystem = runCatching {
-            context.getSystemService(AutofillManager::class.java)
-                ?.hasEnabledAutofillServices() == true
-        }.getOrDefault(false)
+        val enabledBySystem = credentialProviderController.isAutofillServiceEnabled()
         if (!enabledBySystem) {
             SecurityUtil.setPasswordAutofillEnabled(context, false)
             isPasswordAutofillEnabled.value = false
@@ -470,10 +466,8 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                                 SecurityUtil.setPasswordAutofillEnabled(context, enabled)
                                 isPasswordAutofillEnabled.value = enabled
                                 if (enabled) {
-                                    val enabledBySystem = runCatching {
-                                        context.getSystemService(AutofillManager::class.java)
-                                            ?.hasEnabledAutofillServices() == true
-                                    }.getOrDefault(false)
+                                    val enabledBySystem =
+                                        credentialProviderController.isAutofillServiceEnabled()
                                     if (!enabledBySystem) {
                                         runCatching {
                                             autofillAuthorizationLauncher.launch(

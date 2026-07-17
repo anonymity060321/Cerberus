@@ -7,7 +7,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.setValue
 import com.yiran.cerberus.util.TotpUtil
 import androidx.lifecycle.ViewModel
@@ -34,6 +33,8 @@ class HomeViewModel : ViewModel() {
     val accounts: List<Account> = _accounts
 
     private var totpJob: Job? = null
+    private var accountLoadJob: Job? = null
+    private var accountsLoaded = false
     private val saveMutex = Mutex()
     private var saveVersion = 0L
     private var persistedSaveVersion = 0L
@@ -48,23 +49,25 @@ class HomeViewModel : ViewModel() {
 
     // TOTP state (precomputed codes)
     var totpProgress by mutableFloatStateOf(1f)
-    var totpStep by mutableLongStateOf(System.currentTimeMillis() / 30000)
     private val _otpCodes = mutableStateMapOf<Int, String>()
     val otpCodes: Map<Int, String> get() = _otpCodes
 
     fun loadAccounts(context: Context) {
-        viewModelScope.launch {
+        if (accountsLoaded || accountLoadJob?.isActive == true) return
+        val appContext = context.applicationContext
+        accountLoadJob = viewModelScope.launch {
             try {
                 val loadedAccounts = withContext(Dispatchers.IO) {
-                    SecurityUtil.loadAccountsOrThrow(context)
+                    SecurityUtil.loadAccountsOrThrow(appContext)
                 }
                 val normalizedAccounts = ensureUniqueAccountIds(loadedAccounts)
                 _accounts.clear()
                 _accounts.addAll(normalizedAccounts)
                 if (normalizedAccounts != loadedAccounts) {
-                    SecurityUtil.clearAutofillBindings(context)
-                    scheduleSave(context)
+                    SecurityUtil.clearAutofillBindings(appContext)
+                    scheduleSave(appContext)
                 }
+                accountsLoaded = true
                 startTotpTicker()
             } catch (_: Exception) {
                 storageErrorMessage = "无法读取已保存的凭据，原数据尚未被覆盖"
@@ -75,24 +78,29 @@ class HomeViewModel : ViewModel() {
     private fun startTotpTicker() {
         totpJob?.cancel()
         totpJob = viewModelScope.launch {
+            var generatedStep = Long.MIN_VALUE
             while (true) {
-                totpProgress = TotpUtil.getProgress()
-                totpStep = System.currentTimeMillis() / 30000
+                val now = System.currentTimeMillis()
+                val currentStep = now / TOTP_PERIOD_MILLIS
+                totpProgress = TotpUtil.getProgress(now)
 
-                val otpAccounts = _accounts
-                    .filter { it.hasOtp && it.secretKey.isNotEmpty() }
-                    .toList()
-                val generatedCodes = withContext(Dispatchers.Default) {
-                    otpAccounts.associate { account ->
-                        account.id to TotpUtil.generateCode(
-                            account.secretKey,
-                            account.algorithm,
-                            account.otpType
-                        )
+                if (currentStep != generatedStep) {
+                    val otpAccounts = _accounts
+                        .filter { it.hasOtp && it.secretKey.isNotEmpty() }
+                        .toList()
+                    val generatedCodes = withContext(Dispatchers.Default) {
+                        otpAccounts.associate { account ->
+                            account.id to TotpUtil.generateCode(
+                                account.secretKey,
+                                account.algorithm,
+                                account.otpType
+                            )
+                        }
                     }
+                    _otpCodes.clear()
+                    _otpCodes.putAll(generatedCodes)
+                    generatedStep = currentStep
                 }
-                _otpCodes.clear()
-                _otpCodes.putAll(generatedCodes)
 
                 delay(1000)
             }
@@ -100,6 +108,7 @@ class HomeViewModel : ViewModel() {
     }
 
     private fun scheduleSave(context: Context) {
+        val appContext = context.applicationContext
         val snapshot = _accounts.toList()
         val version = ++saveVersion
         viewModelScope.launch {
@@ -107,7 +116,7 @@ class HomeViewModel : ViewModel() {
                 withContext(Dispatchers.IO) {
                     saveMutex.withLock {
                         if (version > persistedSaveVersion) {
-                            SecurityUtil.saveAccounts(context, snapshot)
+                            SecurityUtil.saveAccounts(appContext, snapshot)
                             persistedSaveVersion = version
                         }
                     }
@@ -286,33 +295,39 @@ class HomeViewModel : ViewModel() {
                 val result = withContext(Dispatchers.IO) {
                     val url = URL(RELEASE_API_URL)
                     val connection = url.openConnection() as HttpURLConnection
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 5000
-                    connection.readTimeout = 5000
-                    connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+                    try {
+                        connection.requestMethod = "GET"
+                        connection.connectTimeout = 5000
+                        connection.readTimeout = 5000
+                        connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
 
-                    if (connection.responseCode == 200) {
-                        val response = connection.inputStream.bufferedReader().use { it.readText() }
-                        val json = JSONObject(response)
-                        val latestTag = json.getString("tag_name").removePrefix("v")
-                        val hasUpdate = isVersionNewer(currentVersion, latestTag)
-                        
-                        var downloadUrl: String? = null
-                        val assets = json.optJSONArray("assets")
-                        if (assets != null) {
-                            for (i in 0 until assets.length()) {
-                                val asset = assets.getJSONObject(i)
-                                val name = asset.getString("name")
-                                if (name.endsWith(".apk")) {
-                                    downloadUrl = asset.getString("browser_download_url")
-                                    break
+                        if (connection.responseCode == 200) {
+                            val response = connection.inputStream
+                                .bufferedReader()
+                                .use { it.readText() }
+                            val json = JSONObject(response)
+                            val latestTag = json.getString("tag_name").removePrefix("v")
+                            val hasUpdate = isVersionNewer(currentVersion, latestTag)
+
+                            var downloadUrl: String? = null
+                            val assets = json.optJSONArray("assets")
+                            if (assets != null) {
+                                for (i in 0 until assets.length()) {
+                                    val asset = assets.getJSONObject(i)
+                                    val name = asset.getString("name")
+                                    if (name.endsWith(".apk")) {
+                                        downloadUrl = asset.getString("browser_download_url")
+                                        break
+                                    }
                                 }
                             }
+
+                            Triple(hasUpdate, latestTag, downloadUrl)
+                        } else {
+                            throw Exception("服务器响应异常: ${connection.responseCode}")
                         }
-                        
-                        Triple(hasUpdate, latestTag, downloadUrl)
-                    } else {
-                        throw Exception("服务器响应异常: ${connection.responseCode}")
+                    } finally {
+                        connection.disconnect()
                     }
                 }
                 onResult(result.first, result.second, result.third)
@@ -324,17 +339,6 @@ class HomeViewModel : ViewModel() {
                 onError("检查失败: ${e.message ?: "网络请求异常"}")
             }
         }
-    }
-
-    private fun isVersionNewer(current: String, latest: String): Boolean {
-        val currParts = current.split(".").mapNotNull { it.toIntOrNull() }
-        val latestParts = latest.split(".").mapNotNull { it.toIntOrNull() }
-        
-        for (i in 0 until minOf(currParts.size, latestParts.size)) {
-            if (latestParts[i] > currParts[i]) return true
-            if (latestParts[i] < currParts[i]) return false
-        }
-        return latestParts.size > currParts.size
     }
 
     private fun nextAvailableId(): Int {
@@ -377,9 +381,74 @@ class HomeViewModel : ViewModel() {
     }
 
     private companion object {
+        const val TOTP_PERIOD_MILLIS = 30_000L
         const val MAX_BACKUP_CHARACTERS = 4 * 1024 * 1024
         const val MAX_IMPORTED_ACCOUNTS = 10_000
         const val RELEASE_API_URL =
             "https://api.github.com/repos/anonymity060321/Cerberus/releases/latest"
     }
+}
+
+internal fun isVersionNewer(current: String, latest: String): Boolean {
+    val currentVersion = ParsedVersion.parse(current) ?: return false
+    val latestVersion = ParsedVersion.parse(latest) ?: return false
+    val componentCount = maxOf(currentVersion.core.size, latestVersion.core.size)
+    repeat(componentCount) { index ->
+        val currentPart = currentVersion.core.getOrElse(index) { 0 }
+        val latestPart = latestVersion.core.getOrElse(index) { 0 }
+        if (latestPart != currentPart) return latestPart > currentPart
+    }
+
+    val currentPreRelease = currentVersion.preRelease
+    val latestPreRelease = latestVersion.preRelease
+    return when {
+        currentPreRelease == null -> false
+        latestPreRelease == null -> true
+        else -> comparePreRelease(latestPreRelease, currentPreRelease) > 0
+    }
+}
+
+private data class ParsedVersion(
+    val core: List<Int>,
+    val preRelease: List<String>?
+) {
+    companion object {
+        fun parse(value: String): ParsedVersion? {
+            val withoutBuildMetadata = value
+                .trim()
+                .removePrefix("v")
+                .removePrefix("V")
+                .substringBefore('+')
+            val pieces = withoutBuildMetadata.split('-', limit = 2)
+            val core = pieces.first().split('.').map { part ->
+                part.toIntOrNull()?.takeIf { it >= 0 } ?: return null
+            }
+            if (core.isEmpty()) return null
+            val preRelease = pieces.getOrNull(1)
+                ?.split('.')
+                ?.takeIf { identifiers ->
+                    identifiers.isNotEmpty() && identifiers.none(String::isEmpty)
+                }
+                ?: if (pieces.size == 1) null else return null
+            return ParsedVersion(core, preRelease)
+        }
+    }
+}
+
+private fun comparePreRelease(latest: List<String>, current: List<String>): Int {
+    val count = maxOf(latest.size, current.size)
+    repeat(count) { index ->
+        val latestPart = latest.getOrNull(index) ?: return -1
+        val currentPart = current.getOrNull(index) ?: return 1
+        val latestNumber = latestPart.toLongOrNull()
+        val currentNumber = currentPart.toLongOrNull()
+        val comparison = when {
+            latestNumber != null && currentNumber != null -> latestNumber.compareTo(currentNumber)
+            latestNumber != null -> -1
+            currentNumber != null -> 1
+            else -> latestPart.compareTo(currentPart, ignoreCase = true)
+        }
+        if (comparison != 0) return comparison
+    }
+    return 0
 }

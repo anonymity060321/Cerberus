@@ -19,9 +19,9 @@ class CredentialProviderController(context: Context) {
     )
 
     fun currentStatus(): CredentialProviderStatus = resolveCredentialProviderStatus(
-        isCredentialProviderEnabled = isCredentialProviderEnabled(),
-        isCerberusAutofillEnabled = isCerberusAutofillEnabled(),
-        isSettingsEntryAvailable = isSettingsEntryAvailable()
+        isCredentialProviderEnabled = ::isCredentialProviderEnabled,
+        isCerberusAutofillEnabled = ::isAutofillServiceEnabled,
+        isSettingsEntryAvailable = ::isSettingsEntryAvailable
     )
 
     private fun isCredentialProviderEnabled(): Boolean = runCatching {
@@ -30,7 +30,7 @@ class CredentialProviderController(context: Context) {
     }.getOrDefault(false)
 
     @Suppress("DEPRECATION")
-    private fun isCerberusAutofillEnabled(): Boolean = runCatching {
+    fun isAutofillServiceEnabled(): Boolean = runCatching {
         appContext.getSystemService(AutofillManager::class.java)
             ?.hasEnabledAutofillServices() == true
     }.getOrDefault(false)
@@ -49,12 +49,12 @@ enum class CredentialProviderStatus(val displayText: String) {
 }
 
 internal fun resolveCredentialProviderStatus(
-    isCredentialProviderEnabled: Boolean,
-    isCerberusAutofillEnabled: Boolean,
-    isSettingsEntryAvailable: Boolean
+    isCredentialProviderEnabled: () -> Boolean,
+    isCerberusAutofillEnabled: () -> Boolean,
+    isSettingsEntryAvailable: () -> Boolean
 ): CredentialProviderStatus = when {
-    isCredentialProviderEnabled -> CredentialProviderStatus.ENABLED
-    isCerberusAutofillEnabled -> CredentialProviderStatus.AUTOFILL_ONLY
-    isSettingsEntryAvailable -> CredentialProviderStatus.DISABLED
+    isCredentialProviderEnabled() -> CredentialProviderStatus.ENABLED
+    isCerberusAutofillEnabled() -> CredentialProviderStatus.AUTOFILL_ONLY
+    isSettingsEntryAvailable() -> CredentialProviderStatus.DISABLED
     else -> CredentialProviderStatus.UNSUPPORTED
 }

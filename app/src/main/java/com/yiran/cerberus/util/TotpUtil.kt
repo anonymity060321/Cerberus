@@ -57,8 +57,8 @@ object TotpUtil {
         return value + "=".repeat(missingPadding)
     }
 
-    fun getProgress(): Float {
-        val time = System.currentTimeMillis() / 1000
+    fun getProgress(currentTimeMillis: Long = System.currentTimeMillis()): Float {
+        val time = currentTimeMillis / 1000
         val remaining = 30 - (time % 30)
         return remaining / 30f
     }

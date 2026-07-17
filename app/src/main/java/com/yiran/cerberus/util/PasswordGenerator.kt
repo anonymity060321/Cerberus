@@ -17,17 +17,33 @@ object PasswordGenerator {
         includeDigits: Boolean = true,
         includeSpecial: Boolean = true
     ): String {
-        val charPool = StringBuilder().apply {
-            if (includeUpper) append(UPPER)
-            if (includeLower) append(LOWER)
-            if (includeDigits) append(DIGITS)
-            if (includeSpecial) append(SPECIAL)
-        }.toString()
+        require(length >= 0) { "Password length cannot be negative" }
+        val selectedGroups = buildList {
+            if (includeUpper) add(UPPER)
+            if (includeLower) add(LOWER)
+            if (includeDigits) add(DIGITS)
+            if (includeSpecial) add(SPECIAL)
+        }
+        if (selectedGroups.isEmpty()) return ""
+        require(length >= selectedGroups.size) {
+            "Password length must fit every selected character group"
+        }
 
-        if (charPool.isEmpty()) return ""
-
-        return (1..length)
-            .map { charPool[secureRandom.nextInt(charPool.length)] }
-            .joinToString("")
+        val charPool = selectedGroups.joinToString("")
+        val password = selectedGroups
+            .mapTo(mutableListOf()) { group -> randomCharacter(group) }
+        repeat(length - password.size) {
+            password += randomCharacter(charPool)
+        }
+        for (index in password.lastIndex downTo 1) {
+            val swapIndex = secureRandom.nextInt(index + 1)
+            val value = password[index]
+            password[index] = password[swapIndex]
+            password[swapIndex] = value
+        }
+        return password.joinToString("")
     }
+
+    private fun randomCharacter(group: String): Char =
+        group[secureRandom.nextInt(group.length)]
 }

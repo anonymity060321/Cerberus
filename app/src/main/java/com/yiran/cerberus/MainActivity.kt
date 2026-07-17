@@ -92,8 +92,8 @@ class MainActivity : FragmentActivity() {
                     val context = LocalContext.current
                     val activity = LocalActivity.current as FragmentActivity
                     
-                    var isUnlocked by rememberSaveable { mutableStateOf(false) }
-                    var showPasswordInput by rememberSaveable { mutableStateOf(false) }
+                    var isUnlocked by remember { mutableStateOf(false) }
+                    var showPasswordInput by remember { mutableStateOf(false) }
                     var onboardingStep by rememberSaveable { mutableIntStateOf(if (SecurityUtil.isTermsAccepted(context)) 0 else 1) }
                     var currentScreen by rememberSaveable { mutableStateOf("home") }
                     var isCheckingAuth by remember { mutableStateOf(true) }
@@ -230,11 +230,10 @@ class MainActivity : FragmentActivity() {
                             }
                             showPasswordInput -> {
                                 MasterPasswordScreen(
-                                    onUnlockSuccess = { 
-                                        val isFirstTime = !SecurityUtil.isMasterPasswordSet(context)
+                                    onUnlockSuccess = { wasFirstTime ->
                                         isUnlocked = true
                                         SecurityUtil.markAuthenticated(context)
-                                        if (isFirstTime && SecurityUtil.canUseBiometric(context)) {
+                                        if (wasFirstTime && SecurityUtil.canUseBiometric(context)) {
                                             SecurityUtil.setBiometricEnabled(context, true)
                                         }
                                     },
@@ -480,7 +479,10 @@ fun SplashPlaceholder() {
 }
 
 @Composable
-fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> Unit) {
+fun MasterPasswordScreen(
+    onUnlockSuccess: (wasFirstTime: Boolean) -> Unit,
+    onBiometricRequest: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val isFirstTime = remember { !SecurityUtil.isMasterPasswordSet(context) }
@@ -575,7 +577,7 @@ fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> 
                                     SecurityUtil.setMasterPassword(context, submittedPassword)
                                 }
                             }.onSuccess {
-                                onUnlockSuccess()
+                                onUnlockSuccess(true)
                             }.onFailure {
                                 errorText = "主密码保存失败，请重试"
                             }
@@ -590,7 +592,7 @@ fun MasterPasswordScreen(onUnlockSuccess: () -> Unit, onBiometricRequest: () -> 
                             SecurityUtil.verifyMasterPassword(context, submittedPassword)
                         }
                         if (verified) {
-                            onUnlockSuccess()
+                            onUnlockSuccess(false)
                         } else {
                             errorText = "主密码不正确"
                         }

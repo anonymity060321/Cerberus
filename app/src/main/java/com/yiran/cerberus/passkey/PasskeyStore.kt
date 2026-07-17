@@ -83,14 +83,11 @@ object PasskeyStore {
 
     @Synchronized
     fun touch(context: Context, credentialId: String) {
-        val updated = loadAll(context).map { passkey ->
-            if (passkey.credentialId == credentialId) {
-                passkey.copy(lastUsedAt = System.currentTimeMillis())
-            } else {
-                passkey
-            }
-        }
-        writeAll(context, updated)
+        val current = loadAll(context).toMutableList()
+        val index = current.indexOfFirst { it.credentialId == credentialId }
+        if (index == -1) return
+        current[index] = current[index].copy(lastUsedAt = System.currentTimeMillis())
+        writeAll(context, current)
     }
 
     @Synchronized
