@@ -2,7 +2,6 @@ use crate::CryptoError;
 use base64::{engine::general_purpose, Engine as _};
 use digest::Digest;
 use p256::ecdsa::{Signature, VerifyingKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::{thread_rng, RngCore};
 use serde::Deserialize;
 use serde_cbor::Value as CborValue;
