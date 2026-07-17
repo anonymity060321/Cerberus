@@ -83,9 +83,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.4.0"
+            } ?: "1.4.1"
         } catch (_ : Exception) {
-            "1.4.0"
+            "1.4.1"
         }
     }
 

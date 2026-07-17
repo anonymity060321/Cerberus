@@ -8,7 +8,9 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -72,6 +74,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +84,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -92,8 +96,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yiran.cerberus.util.OtpAlgorithm
 import com.yiran.cerberus.util.PasswordGenerator
 import com.yiran.cerberus.util.TotpUtil
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import uniffi.rust_core.Account
 import uniffi.rust_core.OtpType
 
@@ -102,58 +106,66 @@ fun Modifier.dragToReorder(
     lazyListState: androidx.compose.foundation.lazy.LazyListState,
     getDraggedIndex: () -> Int?,
     getDragOffset: () -> Float,
-    onDragStart: (Int) -> Unit,
+    onDragStart: (index: Int, itemSize: Int) -> Unit,
     onDragMove: (deltaY: Float) -> Unit,
-    onSwap: (from: Int, to: Int, positionDelta: Float) -> Unit,
+    onTargetChange: (targetIndex: Int) -> Unit,
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit
 ): Modifier {
     val haptic = LocalHapticFeedback.current
     return this.pointerInput(Unit) {
-        // use owner's `dragOffset` via `getDragOffset` to avoid local accumulator warnings
         detectDragGesturesAfterLongPress(
             onDragStart = { offset ->
                 lazyListState.layoutInfo.visibleItemsInfo
                     .firstOrNull { item ->
                         offset.y.toInt() in item.offset..(item.offset + item.size)
-                    }?.also { item ->
-                        // 给调用方通知开始索引
+                    }
+                    ?.also { item ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onDragStart(item.index)
+                        onDragStart(item.index, item.size)
                     }
             },
             onDrag = { change, dragAmount ->
                 change.consume()
-                // report movement to owner so it can update visuals
                 onDragMove(dragAmount.y)
 
-                val currentDraggedIndex = getDraggedIndex() ?: return@detectDragGesturesAfterLongPress
-                val visibleItems = lazyListState.layoutInfo.visibleItemsInfo
-                val currentItem = visibleItems.firstOrNull { it.index == currentDraggedIndex }
+                val originIndex = getDraggedIndex()
                     ?: return@detectDragGesturesAfterLongPress
-                val currentLocalOffset = getDragOffset()
+                val visibleItems = lazyListState.layoutInfo.visibleItemsInfo
+                val originItem = visibleItems.firstOrNull { it.index == originIndex }
+                    ?: return@detectDragGesturesAfterLongPress
+                val draggedCenter = originItem.offset +
+                    getDragOffset() +
+                    originItem.size / 2f
+                val originCenter = originItem.offset + originItem.size / 2f
 
-                val targetItem = when {
-                    currentLocalOffset < 0f -> {
-                        visibleItems.firstOrNull { it.index == currentDraggedIndex - 1 }
+                val targetIndex = when {
+                    draggedCenter < originCenter -> {
+                        visibleItems
+                            .asSequence()
+                            .filter { item ->
+                                item.index < originIndex &&
+                                    draggedCenter < item.offset + item.size / 2f
+                            }
+                            .minOfOrNull { it.index }
+                            ?: originIndex
                     }
-                    currentLocalOffset > 0f -> {
-                        visibleItems.firstOrNull { it.index == currentDraggedIndex + 1 }
+                    draggedCenter > originCenter -> {
+                        visibleItems
+                            .asSequence()
+                            .filter { item ->
+                                item.index > originIndex &&
+                                    draggedCenter > item.offset + item.size / 2f
+                            }
+                            .maxOfOrNull { it.index }
+                            ?: originIndex
                     }
-                    else -> null
+                    else -> originIndex
                 }
-
-                if (targetItem != null) {
-                    // Use the actual measured distance between slots. This remains correct for
-                    // variable-height cards and for the first two slots at the LazyColumn boundary.
-                    val positionDelta = (targetItem.offset - currentItem.offset).toFloat()
-                    if (abs(currentLocalOffset) > abs(positionDelta) / 2f) {
-                        onSwap(currentDraggedIndex, targetItem.index, positionDelta)
-                    }
-                }
+                onTargetChange(targetIndex)
             },
-            onDragEnd = { onDragEnd() },
-            onDragCancel = { onDragCancel() }
+            onDragEnd = onDragEnd,
+            onDragCancel = onDragCancel
         )
     }
 }
@@ -162,6 +174,7 @@ fun Modifier.dragToReorder(
 @Composable
 fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewModel()) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val accounts = homeViewModel.accounts
     
@@ -170,9 +183,12 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
     // 拖拽排序状态
     val lazyListState = rememberLazyListState()
     var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
+    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
     var draggedItemKey by remember { mutableStateOf<Any?>(null) }
+    var draggedItemSizePx by remember { mutableFloatStateOf(0f) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var isDraggingActive by remember { mutableStateOf(false) }
+    var suppressPlacementAnimation by remember { mutableStateOf(false) }
 
     // Read UI state from ViewModel
     val showAddDialog = homeViewModel.isAddDialogVisible
@@ -225,40 +241,128 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                             lazyListState = lazyListState,
                             getDraggedIndex = { draggedItemIndex },
                             getDragOffset = { dragOffset },
-                            onDragStart = { index ->
-                                draggedItemIndex = index
-                                draggedItemKey = accounts.getOrNull(index)?.id
-                                dragOffset = 0f
-                                isDraggingActive = true
-                            },
-                            onDragMove = { delta ->
-                                val nextOffset = dragOffset + delta
-                                dragOffset = when (draggedItemIndex) {
-                                    0 -> nextOffset.coerceAtLeast(0f)
-                                    accounts.lastIndex -> nextOffset.coerceAtMost(0f)
-                                    else -> nextOffset
+                            onDragStart = { index, itemSize ->
+                                if (!isDraggingActive) {
+                                    draggedItemIndex = index
+                                    dragTargetIndex = index
+                                    draggedItemKey = accounts.getOrNull(index)?.id
+                                    draggedItemSizePx = itemSize.toFloat()
+                                    dragOffset = 0f
+                                    isDraggingActive = true
                                 }
                             },
-                            onSwap = { from, to, positionDelta ->
-                                homeViewModel.moveAccount(context, from, to)
-                                draggedItemIndex = to
-                                // Keep the dragged card under the finger after its base slot changes.
-                                dragOffset -= positionDelta
+                            onDragMove = { delta ->
+                                val originIndex = draggedItemIndex
+                                val visibleItems = lazyListState.layoutInfo.visibleItemsInfo
+                                val originItem = visibleItems.firstOrNull {
+                                    it.index == originIndex
+                                }
+                                val firstItem = visibleItems.firstOrNull()
+                                val lastItem = visibleItems.lastOrNull()
+                                val nextOffset = dragOffset + delta
+                                dragOffset = if (
+                                    originItem != null &&
+                                    firstItem != null &&
+                                    lastItem != null
+                                ) {
+                                    val minimum = (
+                                        firstItem.offset - originItem.offset
+                                    ).toFloat()
+                                    val maximum = (
+                                        lastItem.offset +
+                                            lastItem.size -
+                                            originItem.offset -
+                                            originItem.size
+                                    ).toFloat()
+                                    nextOffset.coerceIn(minimum, maximum)
+                                } else {
+                                    nextOffset
+                                }
+                            },
+                            onTargetChange = { target ->
+                                dragTargetIndex = target
                             },
                             onDragEnd = {
-                                isDraggingActive = false
-                                scope.launch {
-                                    Animatable(dragOffset).animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow)) {
-                                        dragOffset = value
-                                    }
+                                val from = draggedItemIndex
+                                val requestedTarget = dragTargetIndex
+                                if (from == null || requestedTarget == null) {
+                                    isDraggingActive = false
                                     draggedItemIndex = null
+                                    dragTargetIndex = null
                                     draggedItemKey = null
+                                    draggedItemSizePx = 0f
+                                    dragOffset = 0f
+                                } else {
+                                    val visibleItems =
+                                        lazyListState.layoutInfo.visibleItemsInfo
+                                    val fromItem = visibleItems.firstOrNull {
+                                        it.index == from
+                                    }
+                                    val targetItem = visibleItems.firstOrNull {
+                                        it.index == requestedTarget
+                                    }
+                                    val target = if (
+                                        fromItem != null && targetItem != null
+                                    ) {
+                                        requestedTarget
+                                    } else {
+                                        from
+                                    }
+                                    val dropOffset = when {
+                                        fromItem == null || targetItem == null -> 0f
+                                        target < from -> {
+                                            (targetItem.offset - fromItem.offset).toFloat()
+                                        }
+                                        target > from -> {
+                                            (
+                                                targetItem.offset +
+                                                    targetItem.size -
+                                                    draggedItemSizePx -
+                                                    fromItem.offset
+                                            )
+                                        }
+                                        else -> 0f
+                                    }
+
+                                    scope.launch {
+                                        Animatable(dragOffset).animateTo(
+                                            targetValue = dropOffset,
+                                            animationSpec = tween(durationMillis = 120)
+                                        ) {
+                                            dragOffset = value
+                                        }
+                                        if (target != from) {
+                                            // Let displaced cards reach their placeholder slots.
+                                            delay(140)
+                                            suppressPlacementAnimation = true
+                                            homeViewModel.moveAccount(
+                                                context,
+                                                from,
+                                                target
+                                            )
+                                        }
+                                        draggedItemIndex = null
+                                        dragTargetIndex = null
+                                        draggedItemKey = null
+                                        draggedItemSizePx = 0f
+                                        dragOffset = 0f
+                                        isDraggingActive = false
+
+                                        if (suppressPlacementAnimation) {
+                                            // Keep LazyColumn placement animation disabled for the
+                                            // frame in which the final list order is committed.
+                                            withFrameNanos { }
+                                            suppressPlacementAnimation = false
+                                        }
+                                    }
                                 }
                             },
                             onDragCancel = {
                                 isDraggingActive = false
                                 draggedItemIndex = null
+                                dragTargetIndex = null
                                 draggedItemKey = null
+                                draggedItemSizePx = 0f
                                 dragOffset = 0f
                             }
                         ),
@@ -267,8 +371,37 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                 ) {
                     itemsIndexed(accounts, key = { _, account -> account.id }) { index, account ->
                         val isDragging = account.id == draggedItemKey
+                        val origin = draggedItemIndex
+                        val target = dragTargetIndex
+                        val slotDisplacement = draggedItemSizePx + with(density) {
+                            16.dp.toPx()
+                        }
+                        val displacementTarget = if (
+                            isDraggingActive && origin != null && target != null
+                        ) {
+                            when {
+                                target < origin && index in target until origin -> {
+                                    slotDisplacement
+                                }
+                                target > origin && index in (origin + 1)..target -> {
+                                    -slotDisplacement
+                                }
+                                else -> 0f
+                            }
+                        } else {
+                            0f
+                        }
+                        val displacedOffset by animateFloatAsState(
+                            targetValue = displacementTarget,
+                            animationSpec = tween(durationMillis = 120),
+                            label = "drag_placeholder"
+                        )
                         val elevation by animateDpAsState(
-                            targetValue = if (isDraggingActive && isDragging) 16.dp else 0.dp,
+                            targetValue = if (isDraggingActive && isDragging) {
+                                16.dp
+                            } else {
+                                0.dp
+                            },
                             label = "drag_elevation"
                         )
 
@@ -277,15 +410,34 @@ fun HomeScreen(onSettingsClick: () -> Unit, homeViewModel: HomeViewModel = viewM
                                 .fillMaxWidth()
                                 .zIndex(if (isDragging) 10f else 0f)
                                 .graphicsLayer {
-                                    translationY = if (isDragging) dragOffset else 0f
+                                    translationY = when {
+                                        isDragging -> dragOffset
+                                        isDraggingActive -> displacedOffset
+                                        else -> 0f
+                                    }
                                     shadowElevation = elevation.toPx()
                                     shape = RoundedCornerShape(28.dp)
-                                    val scale = if (isDraggingActive && isDragging) 1.05f else 1.0f
+                                    val scale = if (
+                                        isDraggingActive && isDragging
+                                    ) {
+                                        1.05f
+                                    } else {
+                                        1.0f
+                                    }
                                     scaleX = scale
                                     scaleY = scale
                                 }
                                 .animateItem(
-                                    placementSpec = if (isDragging || (isDraggingActive && index < 2)) null else spring(stiffness = Spring.StiffnessMediumLow)
+                                    placementSpec = if (
+                                        isDraggingActive ||
+                                        suppressPlacementAnimation
+                                    ) {
+                                        null
+                                    } else {
+                                        spring(
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
+                                    }
                                 )
                         ) {
                             AccountItemCard(
