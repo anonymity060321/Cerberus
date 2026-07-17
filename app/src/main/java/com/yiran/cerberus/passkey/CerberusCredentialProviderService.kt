@@ -67,8 +67,8 @@ class CerberusCredentialProviderService : CredentialProviderService() {
         val response = BeginGetCredentialResponse.Builder()
         var matchCount = 0
 
-        // Keep account metadata locked. HyperOS only sees one generic password entry; usernames and
-        // passwords are loaded after Cerberus authentication in AutofillAuthActivity.
+        // Keep account metadata locked. The system receives one generic entry; usernames and
+        // passwords are loaded only after Cerberus authentication.
         request.beginGetCredentialOptions
             .filterIsInstance<BeginGetPasswordOption>()
             .forEach { option ->
@@ -142,11 +142,7 @@ class CerberusCredentialProviderService : CredentialProviderService() {
     }
 
     private fun passwordPendingIntent(): PendingIntent {
-        val intent = Intent(applicationContext, AutofillAuthActivity::class.java)
-            .putExtra(
-                AutofillAuthActivity.EXTRA_MODE,
-                AutofillAuthActivity.MODE_CREDENTIAL_MANAGER_PASSWORD
-            )
+        val intent = Intent(applicationContext, PasswordCredentialActivity::class.java)
         return PendingIntent.getActivity(
             applicationContext,
             requestCode.incrementAndGet(),
