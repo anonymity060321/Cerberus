@@ -82,9 +82,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.3.1"
+            } ?: "1.3.2"
         } catch (_ : Exception) {
-            "1.3.1"
+            "1.3.2"
         }
     }
 
@@ -482,12 +482,12 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                             onClick = { 
                                 SecurityUtil.setUpdateCheckAllowed(context, false)
                                 isUpdateCheckAllowed.value = false
-                                Toast.makeText(context, "已关闭手动检查更新", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "已取消联网授权，恢复离线状态", Toast.LENGTH_SHORT).show()
                             },
                             modifier = Modifier.padding(start = 48.dp)
                         ) {
                             Text(
-                                "关闭手动检查更新",
+                                "取消联网授权并恢复离线",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
                             )
