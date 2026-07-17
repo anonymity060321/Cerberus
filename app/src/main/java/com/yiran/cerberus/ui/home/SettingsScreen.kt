@@ -84,9 +84,9 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
             } else {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            } ?: "1.4.3"
+            } ?: "1.4.4"
         } catch (_ : Exception) {
-            "1.4.3"
+            "1.4.4"
         }
     }
 
@@ -341,7 +341,7 @@ fun SettingsScreen(onBack: () -> Unit, homeViewModel: HomeViewModel = viewModel(
                                             Text(
                                                 text = if (time == 0L) "立即" else "${time / 1000} 秒",
                                                 modifier = Modifier.fillMaxWidth(),
-                                                textAlign = TextAlign.End,
+                                                textAlign = TextAlign.Center,
                                                 fontWeight = FontWeight.Medium
                                             )
                                         },
