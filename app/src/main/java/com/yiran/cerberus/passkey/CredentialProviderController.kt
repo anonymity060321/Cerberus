@@ -2,15 +2,14 @@ package com.yiran.cerberus.passkey
 
 import android.content.ComponentName
 import android.content.Context
-import android.view.autofill.AutofillManager
 import androidx.credentials.CredentialManager
 
 /**
- * Single source of truth for Credential Manager provider state.
+ * Android 16 Credential Manager provider state and settings entry point.
  *
- * Autofill and Credential Manager are separate system services. Some OEM settings screens only
- * update Autofill even when they present a combined picker, so Autofill must never be treated as
- * proof that the passkey provider is enabled.
+ * Passwords and passkeys are exposed by the same CredentialProviderService. Legacy Autofill state
+ * is deliberately not consulted because it is a separate system service and cannot prove that the
+ * credential provider is enabled.
  */
 class CredentialProviderController(context: Context) {
     private val appContext = context.applicationContext
@@ -20,37 +19,27 @@ class CredentialProviderController(context: Context) {
     )
 
     fun currentStatus(): CredentialProviderStatus {
-        if (isCredentialProviderEnabled()) {
-            return CredentialProviderStatus.ENABLED
-        }
-        if (isAutofillServiceEnabled()) {
-            return CredentialProviderStatus.AUTOFILL_ONLY
-        }
-        return if (canOpenCredentialProviderSettings()) {
+        if (isEnabled()) return CredentialProviderStatus.ENABLED
+        return if (settingsPendingIntentAvailable()) {
             CredentialProviderStatus.DISABLED
         } else {
             CredentialProviderStatus.SETTINGS_UNAVAILABLE
         }
     }
 
-    fun openCredentialProviderSettings(): Boolean = runCatching {
+    fun openSettings(): Boolean = runCatching {
         CredentialManager.create(appContext)
             .createSettingsPendingIntent()
             .send()
         true
     }.getOrDefault(false)
 
-    private fun isCredentialProviderEnabled(): Boolean = runCatching {
+    private fun isEnabled(): Boolean = runCatching {
         appContext.getSystemService(android.credentials.CredentialManager::class.java)
             ?.isEnabledCredentialProviderService(providerComponent) == true
     }.getOrDefault(false)
 
-    private fun isAutofillServiceEnabled(): Boolean = runCatching {
-        appContext.getSystemService(AutofillManager::class.java)
-            ?.hasEnabledAutofillServices() == true
-    }.getOrDefault(false)
-
-    private fun canOpenCredentialProviderSettings(): Boolean = runCatching {
+    private fun settingsPendingIntentAvailable(): Boolean = runCatching {
         CredentialManager.create(appContext).createSettingsPendingIntent()
         true
     }.getOrDefault(false)
@@ -58,7 +47,6 @@ class CredentialProviderController(context: Context) {
 
 enum class CredentialProviderStatus(val displayText: String) {
     ENABLED("已启用"),
-    AUTOFILL_ONLY("仅自动填充"),
     DISABLED("未启用"),
-    SETTINGS_UNAVAILABLE("系统不支持")
+    SETTINGS_UNAVAILABLE("系统设置不可用")
 }
